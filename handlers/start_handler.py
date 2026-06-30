@@ -1,5 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
+from config.states import MAIN_MENU
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -7,3 +8,4 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=update.effective_chat.id,
         text="Привет, я бот для решения задач по программированию.",
     )
+    return MAIN_MENU
