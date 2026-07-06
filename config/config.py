@@ -6,3 +6,5 @@ load_dotenv()
 
 # Привет
 TOKEN = os.getenv("TOKEN")
+
+ # ghgkhfk bmobmoimbxfopxn
