@@ -4,9 +4,5 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Привет
 TOKEN = os.getenv("TOKEN")
 
-# ghgkhfk bmobmoimbxfopxn
-OR_TOKEN = os.getenv("OR_TOKEN")
-# я человек паук
