@@ -2,15 +2,17 @@ import logging
 
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
-    CallbackQueryHandler,
+    MessageHandler,
+    filters,
 )
 
 from config.config import TOKEN
-from config.states import MAIN_MENU,GPT
+from config.states import GPT, MAIN_MENU
+from handlers.gpt_handlers import check_solution, start_gpt
 from handlers.start_handler import start_handler
-from handlers.gpt_handlers import start_gpt,generate_and_send_answer
 
 
 def main():
@@ -29,9 +31,11 @@ def main():
                 CallbackQueryHandler(start_gpt, pattern="gpt_ask"),
             ],
             GPT: [
-                CallbackQueryHandler(generate_and_send_answer, pattern="generate_and_send_answer"),
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    check_solution,
+                ),
             ],
-            
         },
         fallbacks=[CommandHandler("start", start_handler)],
     )

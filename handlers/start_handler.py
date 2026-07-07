@@ -1,11 +1,18 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
+
 from config.states import MAIN_MENU
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("Новая задача", callback_data="gpt_ask")],
+    ]
+    markup = InlineKeyboardMarkup(keyboard)
+    
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text="Привет, я бот для решения задач по программированию.",
+        reply_markup=markup,
     )
     return MAIN_MENU
