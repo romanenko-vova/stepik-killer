@@ -29,6 +29,7 @@ def main():
         states={
             MAIN_MENU: [
                 CallbackQueryHandler(start_gpt, pattern="gpt_ask"),
+                CallbackQueryHandler(start_gpt, pattern="start_gpt"),
             ],
             GPT: [
                 MessageHandler(
