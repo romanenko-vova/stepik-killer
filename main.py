@@ -1,4 +1,6 @@
+# Импорты
 import logging
+import asyncio
 
 from telegram.ext import (
     ApplicationBuilder,
@@ -9,11 +11,12 @@ from telegram.ext import (
     filters,
 )
 
+
+from db.database import create_tables 
 from config.config import TOKEN
 from config.states import GPT, MAIN_MENU
 from handlers.gpt_handlers import check_solution, start_gpt
 from handlers.start_handler import start_handler
-
 
 def main():
     logging.basicConfig(
@@ -23,7 +26,13 @@ def main():
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    application = ApplicationBuilder().token(TOKEN).build()
+    application = (
+        ApplicationBuilder()                     
+            .token(TOKEN)                       
+            .post_init(create_tables)      
+            .build()
+    )
+
     conversation_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start_handler)],
         states={
@@ -32,14 +41,12 @@ def main():
                 CallbackQueryHandler(start_gpt, pattern="start_gpt"),
             ],
             GPT: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND,
-                    check_solution,
-                ),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, check_solution),
             ],
         },
         fallbacks=[CommandHandler("start", start_handler)],
     )
+
     application.add_handler(conversation_handler)
     application.run_polling()
 
