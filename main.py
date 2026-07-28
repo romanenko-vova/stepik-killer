@@ -17,6 +17,7 @@ from handlers.gpt_handlers import (
     open_modul_1,
     open_modul_2,
     open_modul_3,
+    run_check,
     start_gpt,
     start_modul,
 )
@@ -44,6 +45,7 @@ def main():
             ],
             GPT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, check_solution),
+                CallbackQueryHandler(run_check, pattern="^check_code$"),
             ],
             MODULS: [
                 CallbackQueryHandler(open_modul_1, pattern="modul_1"),

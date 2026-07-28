@@ -2,11 +2,12 @@ import asyncio
 
 from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes
 
 from config.states import GPT, MAIN_MENU,MODULS
 from services.verify_python_code import verify_python_code
 from db.zadacha_crud import add_task
+from services.code_runner import run_fake_test
 
 
 async def start_gpt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -50,36 +51,51 @@ async def generate_and_send_answer(update: Update, context: ContextTypes.DEFAULT
 
 
 async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # просто запоминаем код и даём кнопку проверки
     user_code = update.effective_message.text
+    context.user_data["user_code"] = user_code
 
-    checking_msg = await context.bot.send_message(
-        chat_id=update.effective_chat.id, text="Проверяю твой код..."
+    keyboard = [[InlineKeyboardButton("Проверить решение", callback_data="check_code")]]
+    markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "Код принял. Нажми кнопку, чтобы проверить.",
+        reply_markup=markup,
     )
+    return GPT
 
-    condition = context.user_data["current_task"]["condition"]
 
-    is_correct, feedback = await verify_python_code(user_code, condition)
+async def run_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка «Проверить решение» → фиктивный тест."""
+    query = update.callback_query
+    await query.answer()
 
-    verdict = "Твой код верный!\n\n" if is_correct else "В коде есть ошибки.\n\n"
-    final_text = f"{verdict}Комментарии:\n{feedback}"
+    code = context.user_data.get("user_code")
+    if not code:
+        await query.edit_message_text("Сначала пришли код решения.")
+        return GPT
 
-    await context.bot.edit_message_text(
-        chat_id=checking_msg.chat_id,
-        message_id=checking_msg.message_id,
-        text=final_text,
-    )
-    if is_correct:
+    await query.edit_message_text("Проверяю решение...")
+
+    ok, report = await run_fake_test(code)
+
+    if ok:
+        text = f"✅ Решение принято!\n\n{report}"
+    else:
+        text = f"❌ Решение не прошло.\n\n{report}"
+
+    await query.edit_message_text(text)
+
+    if ok:
         keyboard = [
             [InlineKeyboardButton("Еще одну задачу!", callback_data="start_gpt_povtor")]
         ]
         markup = InlineKeyboardMarkup(keyboard)
-
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="Решим что-нибудь еще?",
             reply_markup=markup,
         )
-
         return MAIN_MENU
     
 async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
