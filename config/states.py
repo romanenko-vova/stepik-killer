@@ -1,1 +1,1 @@
-MAIN_MENU, GPT, MODULS = range(2)
+MAIN_MENU, GPT, MODULS = range(3)
