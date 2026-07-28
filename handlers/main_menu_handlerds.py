@@ -24,3 +24,6 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=markup,
         )
     return MAIN_MENU
+
+
+

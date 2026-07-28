@@ -10,14 +10,18 @@ from telegram.ext import (
 )
 
 from config.config import TOKEN
-from config.states import GPT, MAIN_MENU
+from config.states import GPT, MAIN_MENU, MODULS
 from db.database import create_tables
 from handlers.gpt_handlers import (
     check_solution,
+    open_modul_1,
+    open_modul_2,
+    open_modul_3,
     run_check,
     start_gpt,
     start_modul,
 )
+from handlers.main_menu_handlerds import main_menu
 from handlers.start_handler import start_handler
 
 
@@ -36,12 +40,18 @@ def main():
         states={
             MAIN_MENU: [
                 CallbackQueryHandler(start_gpt, pattern="gpt_ask"),
-                CallbackQueryHandler(start_gpt, pattern="start_gpt"),
+                CallbackQueryHandler(start_gpt, pattern="start_gpt_povtor"),
                 CallbackQueryHandler(start_modul, pattern="modul_db"),
             ],
             GPT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, check_solution),
                 CallbackQueryHandler(run_check, pattern="^check_code$"),
+            ],
+            MODULS: [
+                CallbackQueryHandler(open_modul_1, pattern="modul_1"),
+                CallbackQueryHandler(open_modul_2, pattern="modul_2"),
+                CallbackQueryHandler(open_modul_3, pattern="modul_3"),
+                CallbackQueryHandler(main_menu, pattern="main_menu"),
             ],
         },
         fallbacks=[CommandHandler("start", start_handler)],
