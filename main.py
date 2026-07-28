@@ -11,8 +11,8 @@ from telegram.ext import (
 )
 from db.database import create_tables 
 from config.config import TOKEN
-from config.states import GPT, MAIN_MENU
-from handlers.gpt_handlers import check_solution, start_gpt,start_modul
+from config.states import GPT, MAIN_MENU, MODULS
+from handlers.gpt_handlers import check_solution, start_gpt,start_modul,open_modul_1,open_modul_2,open_modul_3
 from handlers.start_handler import start_handler
 
 def main():
@@ -35,11 +35,19 @@ def main():
         states={
             MAIN_MENU: [
                 CallbackQueryHandler(start_gpt, pattern="gpt_ask"),
-                CallbackQueryHandler(start_gpt, pattern="start_gpt"),
+                CallbackQueryHandler(start_gpt, pattern="start_gpt_povtor"),
                 CallbackQueryHandler(start_modul, pattern="modul_db"),
             ],
             GPT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, check_solution),
+            ],
+            MODULS: [
+                CallbackQueryHandler(open_modul_1, pattern="modul_1"),
+                CallbackQueryHandler(open_modul_2, pattern="modul_2"),
+                CallbackQueryHandler(open_modul_3, pattern="modul_3"),
+                CallbackQueryHandler(main_menu, pattern="main_menu"),
+
+            
             ],
         },
         

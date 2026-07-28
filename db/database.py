@@ -11,7 +11,8 @@ async def create_tables(app):
                             username TEXT NULL, 
                             class INTEGER NULL,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP)""")
-    
+    #модули
+
     await conn.execute("""CREATE TABLE IF NOT EXISTS modules(
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             title TEXT NOT NULL,
