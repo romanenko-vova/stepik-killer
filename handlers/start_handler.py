@@ -9,7 +9,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Новая задача", callback_data="gpt_ask")],
     ]
     markup = InlineKeyboardMarkup(keyboard)
-    
+
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text="Привет, я бот для решения задач по программированию.",
