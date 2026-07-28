@@ -1,6 +1,5 @@
-# Импорты
 import logging
-import asyncio
+
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -9,11 +8,21 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from db.database import create_tables 
+
 from config.config import TOKEN
 from config.states import GPT, MAIN_MENU, MODULS
-from handlers.gpt_handlers import check_solution, start_gpt,start_modul,open_modul_1,open_modul_2,open_modul_3
+from db.database import create_tables
+from handlers.gpt_handlers import (
+    check_solution,
+    open_modul_1,
+    open_modul_2,
+    open_modul_3,
+    start_gpt,
+    start_modul,
+)
+from handlers.main_menu_handlerds import main_menu
 from handlers.start_handler import start_handler
+
 
 def main():
     logging.basicConfig(
@@ -23,12 +32,7 @@ def main():
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    application = (
-        ApplicationBuilder()                     
-            .token(TOKEN)                       
-            .post_init(create_tables)      
-            .build()
-    )
+    application = ApplicationBuilder().token(TOKEN).post_init(create_tables).build()
 
     conversation_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start_handler)],
@@ -46,11 +50,8 @@ def main():
                 CallbackQueryHandler(open_modul_2, pattern="modul_2"),
                 CallbackQueryHandler(open_modul_3, pattern="modul_3"),
                 CallbackQueryHandler(main_menu, pattern="main_menu"),
-
-            
             ],
         },
-        
         fallbacks=[CommandHandler("start", start_handler)],
     )
 
