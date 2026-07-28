@@ -7,12 +7,20 @@ from config.states import MAIN_MENU
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Новая задача", callback_data="gpt_ask")],
+        [InlineKeyboardButton("Решать модули", callback_data="modul_db")],
     ]
     markup = InlineKeyboardMarkup(keyboard)
-
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="Привет, я бот для решения задач по программированию.",
-        reply_markup=markup,
-    )
+    query = update.callback_query
+    if query:
+        await query.answer()
+        await query.edit_message_text(
+            text="Вы в главном меню.",
+            reply_markup=markup,
+        )
+    else:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Вы в главном меню.",
+            reply_markup=markup,
+        )
     return MAIN_MENU

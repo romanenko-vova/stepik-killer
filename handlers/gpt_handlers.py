@@ -4,8 +4,7 @@ from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from config.states import GPT, MAIN_MENU,MODULS
-from services.verify_python_code import verify_python_code
+from config.states import GPT, MAIN_MENU, MODULS
 from db.zadacha_crud import add_task
 from services.code_runner import run_fake_test
 
@@ -18,7 +17,7 @@ async def start_gpt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(generate_and_send_answer(update, context))
     return GPT
 
-    
+
 async def generate_and_send_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = AsyncOpenAI()
 
@@ -97,7 +96,8 @@ async def run_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=markup,
         )
         return MAIN_MENU
-    
+
+
 async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -107,7 +107,7 @@ async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Модуль 1", callback_data="modul_1")],
         [InlineKeyboardButton("Модуль 2", callback_data="modul_2")],
         [InlineKeyboardButton("Модуль 3", callback_data="modul_3")],
-        [InlineKeyboardButton("Назад", callback_data="main_menu")],  
+        [InlineKeyboardButton("Назад", callback_data="main_menu")],
     ]
     markup = InlineKeyboardMarkup(keyboard)
 
@@ -118,10 +118,11 @@ async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return MODULS
 
+
 async def open_modul_1(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     keyboard = [
         [InlineKeyboardButton("Тема 1", callback_data="topic_1_1")],
         [InlineKeyboardButton("Тема 2", callback_data="topic_1_2")],
@@ -129,34 +130,36 @@ async def open_modul_1(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("В главное меню", callback_data="main_menu")],
     ]
     markup = InlineKeyboardMarkup(keyboard)
-    
+
     await query.edit_message_text(text="Модуль 1:\nВыберите тему:", reply_markup=markup)
     return MODULS
+
 
 async def open_modul_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     keyboard = [
         [InlineKeyboardButton("Тема 1", callback_data="topic_2_1")],
         [InlineKeyboardButton("К модулям", callback_data="modul_db")],
         [InlineKeyboardButton("В главное меню", callback_data="main_menu")],
     ]
     markup = InlineKeyboardMarkup(keyboard)
-    
+
     await query.edit_message_text(text="Модуль 2:\nВыберите тему:", reply_markup=markup)
     return MODULS
+
 
 async def open_modul_3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     keyboard = [
         [InlineKeyboardButton("Тема 1", callback_data="topic_3_1")],
         [InlineKeyboardButton("К модулям", callback_data="modul_db")],
         [InlineKeyboardButton("В главное меню", callback_data="main_menu")],
     ]
     markup = InlineKeyboardMarkup(keyboard)
-    
+
     await query.edit_message_text(text="Модуль 3:\nВыберите тему:", reply_markup=markup)
     return MODULS

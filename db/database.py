@@ -54,7 +54,7 @@ async def create_tables(app):
                         quest_id INTEGER,
                         correct INTEGER,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (quest_id) REFERENCES questions(id) ON DELETE CASCADE)""")   
-    
+                        FOREIGN KEY (quest_id) REFERENCES questions(id) ON DELETE CASCADE)""")
+
     await conn.commit()
     await conn.close()
