@@ -17,7 +17,7 @@ async def start_gpt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(generate_and_send_answer(update, context))
     return GPT
 
-
+    
 async def generate_and_send_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client = AsyncOpenAI()
 
@@ -81,3 +81,7 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         return MAIN_MENU
+    
+async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()

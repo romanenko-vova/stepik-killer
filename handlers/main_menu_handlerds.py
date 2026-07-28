@@ -16,6 +16,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         keyboard = [
             [InlineKeyboardButton("Новая задача", callback_data="gpt_ask")],
+            [InlineKeyboardButton("Решать модули", callback_data="modul_db")],
         ]
         markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
@@ -23,3 +24,6 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=markup,
         )
     return MAIN_MENU
+
+
+
