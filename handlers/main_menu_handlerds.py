@@ -14,7 +14,7 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Новая задача", callback_data="gpt_ask")],
         [InlineKeyboardButton("Решать модули", callback_data="modul_db")],
-    ]
+    ]  
     markup = InlineKeyboardMarkup(keyboard)
     query = update.callback_query
     if query:
