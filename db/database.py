@@ -2,7 +2,7 @@ import aiosqlite
 
 
 async def create_tables(app):
-    conn = await aiosqlite.connect("lead.db")
+    conn = await aiosqlite.connect("stepik_killer.db")
 
     # Таблица пользователей
     await conn.execute(
@@ -21,6 +21,14 @@ async def create_tables(app):
                             description TEXT NULL,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
     )
+    await conn.execute(
+            """CREATE TABLE IF NOT EXISTS topics(
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                title TEXT NOT NULL,
+                                description TEXT NULL,
+                                module_id INTEGER,
+                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
+        )
 
     # задачи
     await conn.execute(
@@ -47,14 +55,6 @@ async def create_tables(app):
         FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE)"""
     )
 
-    # Таблица ответов
-    await conn.execute("""CREATE TABLE IF NOT EXISTS answers(
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        text TEXT, 
-                        quest_id INTEGER,
-                        correct INTEGER,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (quest_id) REFERENCES questions(id) ON DELETE CASCADE)""")
 
     await conn.commit()
     await conn.close()

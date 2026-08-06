@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from config.states import GPT, MAIN_MENU, MODULS
 from db.zadacha_crud import add_task
 from services.code_runner import run_fake_test
+from db.module_crud import get_modules
 
 
 async def start_gpt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -28,7 +29,7 @@ async def generate_and_send_answer(update: Update, context: ContextTypes.DEFAULT
             {
                 "role": "user",
                 "content": "Придумай простенькую задачку на питоне. В конце напиши 'Напиши мне решение этой задачи'.",
-            },
+            },  
         ],
     )
 
@@ -105,13 +106,12 @@ async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.edit_message_text(text="Выбери модуль:")
-
-    keyboard = [
-        [InlineKeyboardButton("Модуль 1", callback_data="modul_1")],
-        [InlineKeyboardButton("Модуль 2", callback_data="modul_2")],
-        [InlineKeyboardButton("Модуль 3", callback_data="modul_3")],
-        [InlineKeyboardButton("Назад", callback_data="main_menu")],
-    ]
+    modules = await get_modules()
+    print(modules)
+    keyboard = []
+    for module in modules:
+        keyboard.append([InlineKeyboardButton(module['title'], callback_data=f"modul_{module['id']}")])
+    
     markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
@@ -173,9 +173,11 @@ async def open_modul_3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MODULS
 
 
-async def open_topic_1(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def open_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    topic = query.data #topic_12
+    topic_n = int(topic[6:])
     keyboard = [
         [InlineKeyboardButton("Задача 1", callback_data="task_1_1")],
         [InlineKeyboardButton("Задача 2", callback_data="task_1_2")],
@@ -183,7 +185,7 @@ async def open_topic_1(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Назад к темам", callback_data="modul_1")],
     ]
     markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 1 > Тема 1", reply_markup=markup)
+    await query.edit_message_text(text=f"Модуль 1 > Тема {topic_n}", reply_markup=markup)
     return MODULS
 
 async def open_topic_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
