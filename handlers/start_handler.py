@@ -39,17 +39,30 @@ def toxic_keyboard(current_level: int = 0, with_back: bool = False):
     return InlineKeyboardMarkup(keyboard)
 
 
+START_INTRO = (
+    "Привет. Это учебник Python в Telegram.\n\n"
+    "Ты решаешь задачи: переменные, условия, циклы, коллекции, функции. "
+    "Станция называется «Романенко Учит» — это просто сеттинг вокруг обычных задач.\n\n"
+    "Берёшь задачу, пишешь код одним сообщением. Бот прогоняет тесты. "
+    "Если не сошлось — можно взять подсказку. Готовое решение сам не покажет."
+)
+
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user = await get_user(user_id)
     if not user:
         user = await create_user(user_id)
 
-    # ещё не выбрал тон — сначала это
+    # ещё не выбрал тон — сначала кто мы, потом выбор
     if user["toxic_level"] == 0:
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Какой уровень токсичности вы выбираете?",
+            text=START_INTRO,
+        )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Как со мной разговаривать?",
             reply_markup=toxic_keyboard(),
         )
         return TOXIC_LEVEL_CHOICE

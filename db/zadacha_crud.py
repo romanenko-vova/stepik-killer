@@ -55,6 +55,21 @@ async def get_solved_task_ids(user_id: int) -> set[int]:
         return {row[0] for row in rows}
 
 
+async def get_progress(user_id: int) -> tuple[int, int]:
+    # сколько закрыл человек и сколько задач всего в каталоге
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM tasks")
+        total = (await cur.fetchone())[0]
+        cur = await conn.execute(
+            """SELECT COUNT(DISTINCT task_id)
+               FROM solutions
+               WHERE user_id = ? AND status = 'ok'""",
+            (user_id,),
+        )
+        solved = (await cur.fetchone())[0]
+    return solved, total
+
+
 async def add_solution(user_id: int, task_id: int, code: str, status: str = "new"):
     async with aiosqlite.connect(DB_PATH) as conn:
         cursor = await conn.execute(
