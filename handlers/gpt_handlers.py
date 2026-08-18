@@ -1,7 +1,9 @@
 import html
 import json
+from pathlib import Path
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from config.states import MAIN_MENU, MODULS, SOLVING
@@ -19,6 +21,8 @@ from db.zadacha_crud import (
 from services.code_runner import run_tests
 from services.tg_html import fit_tg_html
 from services.verify_python_code import give_hint, review_solution
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def pretty_io(text: str) -> str:
@@ -239,13 +243,45 @@ async def open_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
     )
     markup = InlineKeyboardMarkup(keyboard)
+    text = format_task_text(task)
+    image_path = task_image_path(task)
+
+    # картинку нельзя воткнуть в edit_text — шлём фото, потом условие
+    if image_path is not None:
+        chat_id = query.message.chat_id
+        try:
+            await query.message.delete()
+        except TelegramError:
+            pass
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=InputFile(image_path.read_bytes(), filename=image_path.name),
+            caption=task["title"],
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=markup,
+            parse_mode="HTML",
+        )
+        return SOLVING
 
     await query.edit_message_text(
-        text=format_task_text(task),
+        text=text,
         reply_markup=markup,
         parse_mode="HTML",
     )
     return SOLVING
+
+
+def task_image_path(task: dict) -> Path | None:
+    rel = task.get("image")
+    if not rel:
+        return None
+    path = ROOT / rel
+    if not path.is_file():
+        return None
+    return path
 
 
 async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -4,13 +4,18 @@ from config.config import DB_PATH
 
 
 async def add_task(
-    title: str, topic: str, difficulty: int, description: str, tests_json: str
+    title: str,
+    topic: str,
+    difficulty: int,
+    description: str,
+    tests_json: str,
+    image: str | None = None,
 ):
     async with aiosqlite.connect(DB_PATH) as conn:
         cursor = await conn.execute(
-            """INSERT INTO tasks(title, topic, difficulty, description, tests)
-                VALUES(?, ?, ?, ?, ?)""",
-            (title, topic, difficulty, description, tests_json),
+            """INSERT INTO tasks(title, topic, difficulty, description, tests, image)
+                VALUES(?, ?, ?, ?, ?, ?)""",
+            (title, topic, difficulty, description, tests_json, image),
         )
         await conn.commit()
         return cursor.lastrowid

@@ -40,7 +40,20 @@ async def create_tables(app):
         topic TEXT NOT NULL,
         difficulty INTEGER NOT NULL CHECK(difficulty BETWEEN 1 AND 3),
         description TEXT NOT NULL,
-        tests TEXT NOT NULL)"""
+        tests TEXT NOT NULL,
+        image TEXT)"""
+    )
+
+    # старые базы без колонки image — докидываем
+    cur = await conn.execute("PRAGMA table_info(tasks)")
+    cols = [row[1] for row in await cur.fetchall()]
+    if "image" not in cols:
+        await conn.execute("ALTER TABLE tasks ADD COLUMN image TEXT")
+
+    await conn.execute(
+        """CREATE TABLE IF NOT EXISTS catalog_meta(
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            sig TEXT NOT NULL)"""
     )
 
     await conn.execute(

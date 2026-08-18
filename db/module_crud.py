@@ -6,7 +6,7 @@ from config.config import DB_PATH
 async def get_modules():
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT * FROM modules")
+        cur = await conn.execute("SELECT * FROM modules ORDER BY id")
         modules = await cur.fetchall()
         for i in range(len(modules)):
             modules[i] = dict(modules[i])
