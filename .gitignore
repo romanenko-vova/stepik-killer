@@ -4,3 +4,4 @@ __pycache__
 ABOUT/
 *.db
 test.py
+conversation_state.pkl

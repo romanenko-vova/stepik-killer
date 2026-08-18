@@ -3,61 +3,68 @@ import tempfile
 from pathlib import Path
 
 
-async def run_fake_test(code: str) -> tuple[bool, str]:
-    # один захардкоженный тест — потом можно будет брать из БД
-    test_input = "2\n3\n"
-    expected = "5"
+async def run_tests(code: str, tests: list) -> tuple[bool, list]:
+    # пишем код ученика во временный файл и гоняем каждый тест в docker
+    all_ok = True
+    results = []
 
-    # пишем код ученика во временный файл
     with tempfile.TemporaryDirectory() as tmp:
         solution = Path(tmp) / "solution.py"
         solution.write_text(code, encoding="utf-8")
 
-        # запускаем этот файл внутри docker
-        proc = await asyncio.create_subprocess_exec(
-            "docker",
-            "run",
-            "--rm",
-            "-i",
-            "--network",
-            "none",
-            "-v",
-            f"{tmp}:/code",
-            "-w",
-            "/code",
-            "python:3.12-slim",
-            "python",
-            "solution.py",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        for i, test in enumerate(tests, 1):
+            test_input = test["input"]
+            expected = test["expected"].strip()
 
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(test_input.encode()),
-                timeout=10,
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            return False, "Тест 1: ❌ слишком долго (больше 10 секунд)"
-
-        if proc.returncode != 0:
-            return False, f"Тест 1: ❌ ошибка\n{stderr.decode()[-500:]}"
-
-        actual = stdout.decode().strip()
-
-        if actual == expected:
-            return True, (
-                f"Тест 1: ✅\n"
-                f"Вход: {test_input!r}\n"
-                f"Ожидалось: {expected!r}\n"
-                f"Получено: {actual!r}"
+            proc = await asyncio.create_subprocess_exec(
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--network",
+                "none",
+                "-v",
+                f"{tmp}:/code",
+                "-w",
+                "/code",
+                "python:3.12-slim",
+                "python",
+                "solution.py",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
 
-        return False, (
-            f"Тест 1: ❌\n"
-            f"Вход: {test_input!r}\n"
-            f"Ожидалось: {expected!r}\n"
-            f"Получено: {actual!r}"
-        )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(test_input.encode()),
+                    timeout=10,
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                all_ok = False
+                results.append({"n": i, "ok": False, "timeout": True})
+                continue
+
+            if proc.returncode != 0:
+                all_ok = False
+                err = stderr.decode()[-500:]
+                results.append({"n": i, "ok": False, "error": err})
+                continue
+
+            actual = stdout.decode().strip()
+            if actual == expected:
+                results.append({"n": i, "ok": True})
+            else:
+                all_ok = False
+                results.append(
+                    {
+                        "n": i,
+                        "ok": False,
+                        "input": test_input,
+                        "expected": expected,
+                        "actual": actual,
+                    }
+                )
+
+    return all_ok, results

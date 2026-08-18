@@ -1,115 +1,154 @@
 """
-Наполняет БД демо-каталогом: 3 модуля → в каждом 3 темы → в каждой 3 задачи.
-Запуск: python -m db.seed
+Стартовый каталог: 1 модуль, 2 темы, по 3 задачи.
+Кладётся сам при запуске бота. Вручную: python -m db.seed
 """
 
 import asyncio
 import json
 
-from db.database import create_tables
+import aiosqlite
+
+from config.config import DB_PATH
 from db.module_crud import add_module, get_modules
 from db.topic_crud import add_topic
 from db.zadacha_crud import add_task
 
-# у всех задач одно и то же условие и один тест
-DESCRIPTION = (
-    "Считайте два целых числа (каждое на своей строке) "
-    "и выведите их сумму.\n\n"
-    "Пример:\n"
-    "Ввод:\n2\n3\n"
-    "Вывод:\n5"
-)
-
-TESTS = json.dumps(
-    [{"input": "2\n3\n", "expected": "5"}],
-    ensure_ascii=False,
-)
-
-# 3 модуля, у каждого 3 темы, у каждой темы 3 задачи (разные названия)
 CATALOG = [
     {
-        "title": "Основы Python",
+        "title": "Базовый Python",
+        "description": "Переменные и условия",
         "topics": [
             {
-                "title": "Ввод и вывод",
-                "tasks": ["Сумма чисел", "Сложение", "Два числа"],
+                "title": "Работа с переменными",
+                "tasks": [
+                    {
+                        "title": "Сумма двух чисел",
+                        "difficulty": 1,
+                        "description": (
+                            "Даны два целых числа, каждое с новой строки.\n"
+                            "Выведите их сумму."
+                        ),
+                        "tests": [
+                            {"input": "2\n3\n", "expected": "5"},
+                            {"input": "10\n-4\n", "expected": "6"},
+                            {"input": "0\n0\n", "expected": "0"},
+                        ],
+                    },
+                    {
+                        "title": "Периметр прямоугольника",
+                        "difficulty": 1,
+                        "description": (
+                            "Даны длина и ширина прямоугольника, каждое число с новой строки.\n"
+                            "Выведите периметр: 2 * (длина + ширина)."
+                        ),
+                        "tests": [
+                            {"input": "2\n3\n", "expected": "10"},
+                            {"input": "5\n5\n", "expected": "20"},
+                            {"input": "1\n8\n", "expected": "18"},
+                        ],
+                    },
+                    {
+                        "title": "Числа наоборот",
+                        "difficulty": 1,
+                        "description": (
+                            "Даны два числа a и b, каждое с новой строки.\n"
+                            "Выведите сначала b, потом a. Каждое число с новой строки."
+                        ),
+                        "tests": [
+                            {"input": "1\n2\n", "expected": "2\n1"},
+                            {"input": "10\n20\n", "expected": "20\n10"},
+                            {"input": "-3\n7\n", "expected": "7\n-3"},
+                        ],
+                    },
+                ],
             },
             {
-                "title": "Переменные",
-                "tasks": ["Сложи и выведи", "Простая сумма", "Счёт"],
-            },
-            {
-                "title": "Арифметика",
-                "tasks": ["Плюс", "Сложение двух", "Итог суммы"],
-            },
-        ],
-    },
-    {
-        "title": "Условия",
-        "topics": [
-            {
-                "title": "if",
-                "tasks": ["Сумма через if", "Условная сумма", "Если числа"],
-            },
-            {
-                "title": "else",
-                "tasks": ["Сумма с else", "Иначе сумма", "Ветка else"],
-            },
-            {
-                "title": "elif",
-                "tasks": ["Сумма с elif", "Несколько веток", "Цепочка elif"],
-            },
-        ],
-    },
-    {
-        "title": "Циклы",
-        "topics": [
-            {
-                "title": "for",
-                "tasks": ["Сумма в for", "Цикл for", "Перебор for"],
-            },
-            {
-                "title": "while",
-                "tasks": ["Сумма в while", "Цикл while", "Пока while"],
-            },
-            {
-                "title": "range",
-                "tasks": ["Сумма и range", "Диапазон", "range и числа"],
+                "title": "Условия",
+                "tasks": [
+                    {
+                        "title": "Знак числа",
+                        "difficulty": 1,
+                        "description": (
+                            "Дано одно целое число.\n"
+                            "Если оно больше нуля — выведите слово положительное.\n"
+                            "Если меньше нуля — отрицательное.\n"
+                            "Если равно нулю — ноль.\n"
+                            "Слово выводите маленькими буквами, как написано."
+                        ),
+                        "tests": [
+                            {"input": "5\n", "expected": "положительное"},
+                            {"input": "-2\n", "expected": "отрицательное"},
+                            {"input": "0\n", "expected": "ноль"},
+                        ],
+                    },
+                    {
+                        "title": "Большее из двух",
+                        "difficulty": 1,
+                        "description": (
+                            "Даны два целых числа, каждое с новой строки.\n"
+                            "Выведите большее из них.\n"
+                            "Если числа равны — выведите любое."
+                        ),
+                        "tests": [
+                            {"input": "3\n7\n", "expected": "7"},
+                            {"input": "10\n2\n", "expected": "10"},
+                            {"input": "4\n4\n", "expected": "4"},
+                        ],
+                    },
+                    {
+                        "title": "Чёт или нечёт",
+                        "difficulty": 1,
+                        "description": (
+                            "Дано одно целое число.\n"
+                            "Если оно делится на 2 без остатка — выведите чёт.\n"
+                            "Иначе выведите нечёт.\n"
+                            "Точно так, маленькими буквами."
+                        ),
+                        "tests": [
+                            {"input": "4\n", "expected": "чёт"},
+                            {"input": "7\n", "expected": "нечёт"},
+                            {"input": "0\n", "expected": "чёт"},
+                        ],
+                    },
+                ],
             },
         ],
     },
 ]
 
 
-async def create_demo_catalog():
-    """Создаёт 3 модуля × 3 темы × 3 задачи. Если модули уже есть — ничего не делает."""
-    await create_tables(None)
+async def clear_catalog():
+    # юзеров не трогаем, каталог пересобираем
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute("DELETE FROM solutions")
+        await conn.execute("DELETE FROM tasks")
+        await conn.execute("DELETE FROM topics")
+        await conn.execute("DELETE FROM modules")
+        await conn.commit()
 
-    if await get_modules():
-        print("Модули уже есть, ничего не добавляю.")
+
+async def seed_if_empty():
+    modules = await get_modules()
+    if len(modules) == 1 and modules[0]["title"] == "Базовый Python":
         return
 
+    await clear_catalog()
+
     for module in CATALOG:
-        module_id = await add_module(module["title"])
-        print(f"Модуль: {module['title']} (id={module_id})")
-
+        module_id = await add_module(module["title"], module["description"])
         for topic in module["topics"]:
-            topic_id = await add_topic(topic["title"], module_id)
-            print(f"  Тема: {topic['title']} (id={topic_id})")
-
-            for task_title in topic["tasks"]:
-                # topic в таблице tasks пока строка — кладём название темы
-                task_id = await add_task(
-                    task_title,
+            await add_topic(topic["title"], module_id)
+            for task in topic["tasks"]:
+                await add_task(
+                    task["title"],
                     topic["title"],
-                    1,
-                    DESCRIPTION,
-                    TESTS,
+                    task["difficulty"],
+                    task["description"],
+                    json.dumps(task["tests"], ensure_ascii=False),
                 )
-                print(f"    Задача: {task_title} (id={task_id})")
-
-    print("Готово: 3 модуля, 9 тем, 27 задач.")
 
 
 if __name__ == "__main__":
-    asyncio.run(create_demo_catalog())
+    from db.database import create_tables
+
+    asyncio.run(create_tables(None))
