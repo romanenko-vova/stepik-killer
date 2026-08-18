@@ -97,7 +97,11 @@ def format_task_text(task: dict) -> str:
             f"Ввод:\n<code>{pretty_io(test['input'])}</code>\n"
             f"Вывод:\n<code>{pretty_io(test['expected'])}</code>"
         )
-    parts.append("\n\nПришли решение одним сообщением — код на Python.")
+    parts.append(
+        "\n\nПиши <code>input()</code> без текста внутри — "
+        "подсказка попадёт в вывод и тесты не пройдут.\n"
+        "Пришли решение одним сообщением — код на Python."
+    )
     return "".join(parts)
 
 
