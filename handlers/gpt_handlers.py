@@ -1,293 +1,400 @@
-import asyncio
+import html
+import json
+from pathlib import Path
 
-from openai import AsyncOpenAI
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
-from config.states import GPT, MAIN_MENU, MODULS
-from db.zadacha_crud import add_task
-from services.code_runner import run_fake_test
-from db.module_crud import get_modules
+from config.states import MAIN_MENU, MODULS, SOLVING
+from db.module_crud import get_module, get_modules
+from db.topic_crud import get_topic, get_topics_by_module_id
+from db.users_crud import get_user
+from db.zadacha_crud import (
+    add_solution,
+    get_attempt_count,
+    get_recent_attempts,
+    get_solved_task_ids,
+    get_task,
+    get_tasks_by_topic,
+)
+from services.code_runner import run_tests
+from services.tg_html import fit_tg_html
+from services.verify_python_code import give_hint, review_solution
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
-async def start_gpt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    await query.edit_message_text(text="Придумываю для тебя новую задачу.")
-    context.application.create_task(generate_and_send_answer(update, context))
-    return GPT
+def pretty_io(text: str) -> str:
+    # если в базе лежит текст с \n как символами — делаем настоящие переносы
+    text = text.replace("\\n", "\n").strip()
+    return html.escape(text)
 
 
-async def generate_and_send_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    client = AsyncOpenAI()
-
-    response = await client.responses.create(
-        model="gpt-5.4-mini",
-        input=[
-            {"role": "system", "content": "Ты — генератор задач по Python."},
-            {
-                "role": "user",
-                "content": "Придумай простенькую задачку на питоне. В конце напиши 'Напиши мне решение этой задачи'.",
-            },  
-        ],
-    )
-
-    answer_text = response.output_text
-
-    query = update.callback_query
-    await query.edit_message_text(text=answer_text)
-    
-    context.user_data["current_task"] = {
-        "condition": answer_text,
-    }
-    
-    sample_tests = '[{"input_text":"1 1", "output_text": "2"}, {"input_text":"2 2", "output_text": "4"}]'
-    await add_task("Задача", "списки", 1, answer_text, sample_tests)
+def fix_quotes(code: str) -> str:
+    # в тг часто прилетают фигурные кавычки, питон их не понимает
+    return code.replace("‘", "'").replace("’", "'")
 
 
-async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_message or not update.effective_message.text:
-        await update.message.reply_text("Пришлите текст кода для проверки.")
-        return GPT
+def format_tests_plain(results: list[dict]) -> str:
+    # для gpt — обычный текст, тоже с нормальными переносами
+    parts = []
+    for item in results:
+        if item.get("ok"):
+            parts.append(f"Тест {item['n']}: ✅")
+        elif item.get("timeout"):
+            parts.append(f"Тест {item['n']}: ❌ слишком долго (больше 10 секунд)")
+        elif item.get("error"):
+            parts.append(f"Тест {item['n']}: ❌ ошибка\n{item['error']}")
+        else:
+            inp = item["input"].replace("\\n", "\n").strip()
+            exp = item["expected"].replace("\\n", "\n").strip()
+            got = item["actual"].replace("\\n", "\n").strip()
+            parts.append(
+                f"Тест {item['n']}: ❌\n"
+                f"Ввод:\n{inp}\n"
+                f"Ожидалось:\n{exp}\n"
+                f"Получено:\n{got}"
+            )
+    return "\n\n".join(parts)
 
-    user_code = update.effective_message.text
-    context.user_data["user_code"] = user_code
 
-    keyboard = [[InlineKeyboardButton("Проверить решение", callback_data="check_code")]]
-    markup = InlineKeyboardMarkup(keyboard)
+def format_tests_html(results: list[dict]) -> str:
+    parts = []
+    for item in results:
+        if item.get("ok"):
+            parts.append(f"<b>Тест {item['n']}:</b> ✅")
+        elif item.get("timeout"):
+            parts.append(f"<b>Тест {item['n']}:</b> ❌ слишком долго (больше 10 секунд)")
+        elif item.get("error"):
+            parts.append(
+                f"<b>Тест {item['n']}:</b> ❌ ошибка\n"
+                f"<code>{html.escape(item['error'])}</code>"
+            )
+        else:
+            parts.append(
+                f"<b>Тест {item['n']}:</b> ❌\n"
+                f"Ввод:\n<code>{pretty_io(item['input'])}</code>\n"
+                f"Ожидалось:\n<code>{pretty_io(item['expected'])}</code>\n"
+                f"Получено:\n<code>{pretty_io(item['actual'])}</code>"
+            )
+    return "\n\n".join(parts)
 
-    await update.message.reply_text(
-        "Код принял. Нажми кнопку, чтобы проверить.",
-        reply_markup=markup,
-    )
-    return GPT
 
+def format_task_text(task: dict) -> str:
+    tests = json.loads(task["tests"])[:3]
+    title = html.escape(task["title"])
+    description = html.escape(task["description"])
 
-async def run_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Кнопка «Проверить решение» → фиктивный тест."""
-    query = update.callback_query
-    await query.answer()
-
-    code: str | None = context.user_data.get("user_code")
-    if not code:
-        await query.edit_message_text("Сначала пришли код решения.")
-        return GPT
-
-    await query.edit_message_text("Проверяю решение...")
-
-    ok, report = await run_fake_test(code)
-
-    text = f"{'✅' if ok else '❌'} Решение {'принято' if ok else 'не прошло'}.\n\n{report}"
-    await query.edit_message_text(text)
-
-    if ok:
-        keyboard = [
-            [InlineKeyboardButton("Еще одну задачу!", callback_data="repeat_task")]
-        ]
-        markup = InlineKeyboardMarkup(keyboard)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text="Решим что-нибудь еще?",
-            reply_markup=markup,
+    parts = [
+        f"<b>{title}</b>\n\n",
+        f"{description}\n\n",
+        "<b>Примеры тестов</b>",
+    ]
+    for i, test in enumerate(tests, 1):
+        parts.append(
+            f"\n\n<b>Тест {i}</b>\n"
+            f"Ввод:\n<code>{pretty_io(test['input'])}</code>\n"
+            f"Вывод:\n<code>{pretty_io(test['expected'])}</code>"
         )
-        return MAIN_MENU
-
-
-
-async def repeat_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.delete_message()
-    return await start_gpt(update, context)
+    parts.append(
+        "\n\nПиши <code>input()</code> без текста внутри — "
+        "подсказка попадёт в вывод и тесты не пройдут.\n"
+        "Пришли решение одним сообщением — код на Python."
+    )
+    return "".join(parts)
 
 
 async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(text="Выбери модуль:")
+
     modules = await get_modules()
-    print(modules)
     keyboard = []
     for module in modules:
-        keyboard.append([InlineKeyboardButton(module['title'], callback_data=f"modul_{module['id']}")])
-    
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    module["title"],
+                    callback_data=f"modul_{module['id']}",
+                    style="primary",
+                )
+            ]
+        )
+    keyboard.append(
+        [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
+    )
     markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
         text="Выберите модуль:",
         reply_markup=markup,
     )
-
     return MODULS
 
 
-async def open_modul_1(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def open_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    keyboard = [
-        [InlineKeyboardButton("Тема 1", callback_data="topic_1")],
-        [InlineKeyboardButton("Тема 2", callback_data="topic_2")],
-        [InlineKeyboardButton("Тема 3", callback_data="topic_3")],
-        [InlineKeyboardButton("К модулям", callback_data="modul_db")],
-        [InlineKeyboardButton("В главное меню", callback_data="main_menu")],
-    ]
+    module_id = int(query.data.split("_")[1])
+    context.user_data["module_id"] = module_id
+
+    module = await get_module(module_id)
+    topics = await get_topics_by_module_id(module_id)
+
+    keyboard = []
+    for topic in topics:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    topic["title"],
+                    callback_data=f"topic_{topic['id']}",
+                    style="primary",
+                )
+            ]
+        )
+    keyboard.append(
+        [InlineKeyboardButton("К модулям", callback_data="modul_db", style="primary")]
+    )
+    keyboard.append(
+        [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
+    )
     markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(text="Модуль 1:\nВыберите тему:", reply_markup=markup)
-    return MODULS
-
-
-async def open_modul_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    keyboard = [
-        [InlineKeyboardButton("Тема 1", callback_data="topic_4")],
-        [InlineKeyboardButton("Тема 2", callback_data="topic_5")],
-        [InlineKeyboardButton("Тема 3", callback_data="topic_6")],
-        [InlineKeyboardButton("К модулям", callback_data="modul_db")],
-        [InlineKeyboardButton("В главное меню", callback_data="main_menu")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    await query.edit_message_text(text="Модуль 2:\nВыберите тему:", reply_markup=markup)
-    return MODULS
-
-
-async def open_modul_3(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    keyboard = [
-        [InlineKeyboardButton("Тема 1", callback_data="topic_7")],
-        [InlineKeyboardButton("Тема 2", callback_data="topic_8")],
-        [InlineKeyboardButton("Тема 3", callback_data="topic_9")],
-        [InlineKeyboardButton("К модулям", callback_data="modul_db")],
-        [InlineKeyboardButton("В главное меню", callback_data="main_menu")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-
-    await query.edit_message_text(text="Модуль 3:\nВыберите тему:", reply_markup=markup)
+    title = module["title"] if module else "Модуль"
+    await query.edit_message_text(
+        text=f"{title}\nВыберите тему:",
+        reply_markup=markup,
+    )
     return MODULS
 
 
 async def open_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    topic = query.data #topic_12
-    topic_n = int(topic[6:])
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_1_1")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_1_2")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_1_3")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_1")],
-    ]
+
+    topic_id = int(query.data.split("_")[1])
+    context.user_data["topic_id"] = topic_id
+
+    topic = await get_topic(topic_id)
+    tasks = await get_tasks_by_topic(topic["title"])
+    module_id = topic["module_id"]
+    context.user_data["module_id"] = module_id
+
+    user = await get_user(update.effective_user.id)
+    solved_ids = await get_solved_task_ids(user["id"]) if user else set()
+
+    keyboard = []
+    for task in tasks:
+        title = task["title"]
+        style = "primary"
+        # решённые красим зелёным и ставим галочку
+        if task["id"] in solved_ids:
+            title = f"✅ {title}"
+            style = "success"
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    title,
+                    callback_data=f"task_{task['id']}",
+                    style=style,
+                )
+            ]
+        )
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "Назад к темам",
+                callback_data=f"modul_{module_id}",
+                style="primary",
+            )
+        ]
+    )
+    keyboard.append(
+        [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
+    )
     markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text=f"Модуль 1 > Тема {topic_n}", reply_markup=markup)
+
+    await query.edit_message_text(
+        text=f"{topic['title']}\nВыберите задачу:",
+        reply_markup=markup,
+    )
     return MODULS
 
-async def open_topic_2(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_1_4")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_1_5")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_1_6")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_1")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 1 > Тема 2", reply_markup=markup)
-    return MODULS
 
-async def open_topic_3(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def open_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_1_7")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_1_8")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_1_9")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_1")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 1 > Тема 3", reply_markup=markup)
-    return MODULS
 
-async def open_topic_4(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_2_1")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_2_2")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_2_3")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_2")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 2 > Тема 1", reply_markup=markup)
-    return MODULS
+    task_id = int(query.data.split("_")[1])
+    task = await get_task(task_id)
+    context.user_data["task_id"] = task_id
 
-async def open_topic_5(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_2_4")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_2_5")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_2_6")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_2")],
-    ]
+    topic_id = context.user_data.get("topic_id")
+    keyboard = []
+    if topic_id:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "Назад к задачам",
+                    callback_data=f"topic_{topic_id}",
+                    style="primary",
+                )
+            ]
+        )
+    keyboard.append(
+        [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
+    )
     markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 2 > Тема 2", reply_markup=markup)
-    return MODULS
+    text = format_task_text(task)
+    image_path = task_image_path(task)
 
-async def open_topic_6(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_2_7")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_2_8")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_2_9")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_2")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 2 > Тема 3", reply_markup=markup)
-    return MODULS
+    # картинку нельзя воткнуть в edit_text — шлём фото, потом условие
+    if image_path is not None:
+        chat_id = query.message.chat_id
+        try:
+            await query.message.delete()
+        except TelegramError:
+            pass
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=InputFile(image_path.read_bytes(), filename=image_path.name),
+            caption=task["title"],
+        )
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=markup,
+            parse_mode="HTML",
+        )
+        return SOLVING
 
-async def open_topic_7(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_3_1")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_3_2")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_3_3")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_3")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 3 > Тема 1", reply_markup=markup)
-    return MODULS
+    await query.edit_message_text(
+        text=text,
+        reply_markup=markup,
+        parse_mode="HTML",
+    )
+    return SOLVING
 
-async def open_topic_8(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_3_4")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_3_5")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_3_6")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_3")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 3 > Тема 2", reply_markup=markup)
-    return MODULS
 
-async def open_topic_9(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def task_image_path(task: dict) -> Path | None:
+    rel = task.get("image")
+    if not rel:
+        return None
+    path = ROOT / rel
+    if not path.is_file():
+        return None
+    return path
+
+
+async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    task_id = context.user_data.get("task_id")
+    if not task_id:
+        await update.message.reply_text("Сначала выбери задачу в меню.")
+        return MAIN_MENU
+
+    user_code = fix_quotes(update.message.text)
+    wait = await update.message.reply_text("Проверяю решение...")
+
+    task = await get_task(task_id)
+    tests = json.loads(task["tests"])
+    ok, results = await run_tests(user_code, tests)
+    report = format_tests_plain(results)
+
+    user = await get_user(update.effective_user.id)
+    await add_solution(user["id"], task_id, user_code, "ok" if ok else "fail")
+    attempt_count = await get_attempt_count(user["id"], task_id)
+    recent_attempts = await get_recent_attempts(user["id"], task_id)
+    context.user_data["last_code"] = user_code
+    context.user_data["last_report"] = report
+
+    # тесты уже прогнались — gpt смотрит код и отчёт, орёт в выбранном тоне
+    feedback = await review_solution(
+        user_code,
+        task["description"],
+        report,
+        user["toxic_level"],
+        attempt_count,
+        recent_attempts,
+        ok,
+    )
+
+    head = (
+        f"<b>Попытка №{attempt_count}</b>\n\n"
+        f"<b>Тесты</b>\n{format_tests_html(results)}\n\n"
+    )
+    tail = ""
+    if not ok:
+        tail = "\n\nМожешь прислать исправленный код сам или нажать «Дай подсказку»."
+    feedback = fit_tg_html(feedback, max(400, 4000 - len(head) - len(tail)))
+    text = head + feedback + tail
+
+    topic_id = context.user_data.get("topic_id")
+    keyboard = []
+    if not ok:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "💡 Дай подсказку",
+                    callback_data="hint",
+                    style="primary",
+                )
+            ]
+        )
+    if topic_id:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "К задачам",
+                    callback_data=f"topic_{topic_id}",
+                    style="success" if ok else "primary",
+                )
+            ]
+        )
+    keyboard.append(
+        [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
+    )
+    markup = InlineKeyboardMarkup(keyboard)
+
+    # успех не затираем кнопками — результат остаётся, меню уходит новым сообщением
+    if ok:
+        await wait.edit_text(text, parse_mode="HTML")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Задача решена. Что дальше?",
+            reply_markup=markup,
+        )
+    else:
+        await wait.edit_text(text, reply_markup=markup, parse_mode="HTML")
+    return SOLVING
+
+
+async def send_hint(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("Задача 1", callback_data="task_3_7")],
-        [InlineKeyboardButton("Задача 2", callback_data="task_3_8")],
-        [InlineKeyboardButton("Задача 3", callback_data="task_3_9")],
-        [InlineKeyboardButton("Назад к темам", callback_data="modul_3")],
-    ]
-    markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Модуль 3 > Тема 3", reply_markup=markup)
-    return MODULS
+
+    task_id = context.user_data.get("task_id")
+    code = context.user_data.get("last_code")
+    report = context.user_data.get("last_report")
+    if not task_id or not code:
+        await query.message.reply_text("Сначала пришли решение.")
+        return SOLVING
+
+    wait = await query.message.reply_text("Думаю над подсказкой...")
+    task = await get_task(task_id)
+    user = await get_user(update.effective_user.id)
+    attempt_count = await get_attempt_count(user["id"], task_id)
+    recent_attempts = await get_recent_attempts(user["id"], task_id)
+
+    hint = await give_hint(
+        code,
+        task["description"],
+        report or "",
+        user["toxic_level"],
+        attempt_count,
+        recent_attempts,
+    )
+    hint = fit_tg_html(hint, 4000)
+    await wait.edit_text(hint, parse_mode="HTML")
+    return SOLVING

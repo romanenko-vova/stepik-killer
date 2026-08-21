@@ -1,6 +1,9 @@
 __pycache__
 .env
 .venv
+env/
 ABOUT/
 *.db
 test.py
+conversation_state.pkl
+.DS_Store
