@@ -6,7 +6,7 @@ from db.module_crud import add_module
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await add_module('Модуль 1')
+    
     keyboard = [
         [InlineKeyboardButton("Новая задача", callback_data="gpt_ask")],
         [InlineKeyboardButton("Решать модули", callback_data="modul_db")],
