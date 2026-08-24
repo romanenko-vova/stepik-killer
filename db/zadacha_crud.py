@@ -44,38 +44,59 @@ async def get_tasks_by_topic(topic_title: str):
 
 
 async def get_solved_task_ids(user_id: int) -> set[int]:
+    # только те, что закрыты на ТЕКУЩЕЙ версии условия
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute(
-            """SELECT DISTINCT task_id
-               FROM solutions
-               WHERE user_id = ? AND status = 'ok'""",
+            """SELECT DISTINCT s.task_id
+               FROM solutions s
+               JOIN tasks t ON t.id = s.task_id
+               WHERE s.user_id = ?
+                 AND s.status = 'ok'
+                 AND s.content_sig IS NOT NULL
+                 AND s.content_sig = t.content_sig""",
             (user_id,),
         )
         rows = await cur.fetchall()
         return {row[0] for row in rows}
 
 
-async def get_progress(user_id: int) -> tuple[int, int]:
-    # сколько закрыл человек и сколько задач всего в каталоге
+async def get_stale_task_ids(user_id: int) -> set[int]:
+    # когда-то решил, но задача с тех пор поменялась
+    solved = await get_solved_task_ids(user_id)
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cur = await conn.execute(
+            """SELECT DISTINCT s.task_id
+               FROM solutions s
+               JOIN tasks t ON t.id = s.task_id
+               WHERE s.user_id = ?
+                 AND s.status = 'ok'
+                 AND (
+                   s.content_sig IS NULL
+                   OR s.content_sig != t.content_sig
+                 )""",
+            (user_id,),
+        )
+        rows = await cur.fetchall()
+        return {row[0] for row in rows} - solved
+
+
+async def get_progress(user_id: int) -> tuple[int, int, int]:
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute("SELECT COUNT(*) FROM tasks")
         total = (await cur.fetchone())[0]
-        cur = await conn.execute(
-            """SELECT COUNT(DISTINCT task_id)
-               FROM solutions
-               WHERE user_id = ? AND status = 'ok'""",
-            (user_id,),
-        )
-        solved = (await cur.fetchone())[0]
-    return solved, total
+    solved = len(await get_solved_task_ids(user_id))
+    stale = len(await get_stale_task_ids(user_id))
+    return solved, total, stale
 
 
 async def add_solution(user_id: int, task_id: int, code: str, status: str = "new"):
+    task = await get_task(task_id)
+    sig = task.get("content_sig") if task else None
     async with aiosqlite.connect(DB_PATH) as conn:
         cursor = await conn.execute(
-            """INSERT INTO solutions(user_id, task_id, code, status)
-                VALUES(?, ?, ?, ?)""",
-            (user_id, task_id, code, status),
+            """INSERT INTO solutions(user_id, task_id, code, status, content_sig)
+                VALUES(?, ?, ?, ?, ?)""",
+            (user_id, task_id, code, status, sig),
         )
         await conn.commit()
         return cursor.lastrowid

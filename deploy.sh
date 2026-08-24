@@ -6,6 +6,7 @@ cd "$(dirname "$0")"
 
 git fetch origin
 git reset --hard origin/main
+./env/bin/pip install -q -r requirements.txt
 
 export NVM_DIR="$HOME/.nvm"
 . "$NVM_DIR/nvm.sh"

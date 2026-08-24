@@ -11,7 +11,7 @@ async def main_menu_text(tg_id: int) -> str:
     if not user:
         user = await create_user(tg_id)
 
-    solved, total = await get_progress(user["id"])
+    solved, total, stale = await get_progress(user["id"])
     if total == 0:
         progress = "Задач пока нет — каталог пустой."
     elif solved == 0:
@@ -20,6 +20,8 @@ async def main_menu_text(tg_id: int) -> str:
         progress = f"Прогресс: {solved} из {total}. Все закрыты."
     else:
         progress = f"Прогресс: {solved} из {total}."
+    if stale:
+        progress += f" Ещё {stale} изменились — их надо решить снова."
 
     return (
         "Тут надо решать задачи на Python.\n\n"

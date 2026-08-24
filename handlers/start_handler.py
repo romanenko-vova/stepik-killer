@@ -2,7 +2,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from config.states import SETTINGS, TOXIC_LEVEL_CHOICE
-from db.users_crud import create_user, get_user, set_toxic_level
+from db.users_crud import create_user, get_user, set_toxic_level, touch_user
 from handlers.main_menu_handlerds import main_menu
 
 TOXIC_LEVELS = {
@@ -49,10 +49,12 @@ START_INTRO = (
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user = await get_user(user_id)
+    tg = update.effective_user
+    user = await get_user(tg.id)
     if not user:
-        user = await create_user(user_id)
+        user = await create_user(tg.id, tg.username, tg.first_name)
+    else:
+        user = await touch_user(tg.id, tg.username, tg.first_name)
 
     # ещё не выбрал тон — сначала кто мы, потом выбор
     if user["toxic_level"] == 0:

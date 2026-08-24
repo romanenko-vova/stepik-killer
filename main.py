@@ -11,6 +11,7 @@ from telegram.ext import (
     filters,
 )
 
+from admin.app import start_admin
 from config.config import TOKEN
 from config.states import MAIN_MENU, MODULS, SETTINGS, SOLVING, TOXIC_LEVEL_CHOICE
 from db.database import create_tables
@@ -26,6 +27,11 @@ from handlers.main_menu_handlerds import main_menu
 from handlers.start_handler import choose_toxic, open_settings, start_handler
 
 
+async def on_startup(app):
+    await create_tables(app)
+    await start_admin()
+
+
 def main():
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -37,7 +43,9 @@ def main():
     application = (
         ApplicationBuilder()
         .token(TOKEN)
-        .post_init(create_tables)
+        # не в скобки билдера — это метод цепочки, иначе TypeError
+        .concurrent_updates(True)
+        .post_init(on_startup)
         .persistence(persistence)
         .build()
     )

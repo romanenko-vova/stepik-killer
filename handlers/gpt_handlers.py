@@ -1,5 +1,7 @@
+import asyncio
 import html
 import json
+import logging
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
@@ -15,6 +17,7 @@ from db.zadacha_crud import (
     get_attempt_count,
     get_recent_attempts,
     get_solved_task_ids,
+    get_stale_task_ids,
     get_task,
     get_tasks_by_topic,
 )
@@ -184,15 +187,18 @@ async def open_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = await get_user(update.effective_user.id)
     solved_ids = await get_solved_task_ids(user["id"]) if user else set()
+    stale_ids = await get_stale_task_ids(user["id"]) if user else set()
 
     keyboard = []
     for task in tasks:
         title = task["title"]
         style = "primary"
-        # решённые красим зелёным и ставим галочку
+        # решённые — галочка, изменившиеся — перезагрузка
         if task["id"] in solved_ids:
             title = f"✅ {title}"
             style = "success"
+        elif task["id"] in stale_ids:
+            title = f"🔄 {title}"
         keyboard.append(
             [
                 InlineKeyboardButton(
@@ -288,49 +294,7 @@ def task_image_path(task: dict) -> Path | None:
     return path
 
 
-async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    task_id = context.user_data.get("task_id")
-    if not task_id:
-        await update.message.reply_text("Сначала выбери задачу в меню.")
-        return MAIN_MENU
-
-    user_code = fix_quotes(update.message.text)
-    wait = await update.message.reply_text("Проверяю решение...")
-
-    task = await get_task(task_id)
-    tests = json.loads(task["tests"])
-    ok, results = await run_tests(user_code, tests)
-    report = format_tests_plain(results)
-
-    user = await get_user(update.effective_user.id)
-    await add_solution(user["id"], task_id, user_code, "ok" if ok else "fail")
-    attempt_count = await get_attempt_count(user["id"], task_id)
-    recent_attempts = await get_recent_attempts(user["id"], task_id)
-    context.user_data["last_code"] = user_code
-    context.user_data["last_report"] = report
-
-    # тесты уже прогнались — gpt смотрит код и отчёт, орёт в выбранном тоне
-    feedback = await review_solution(
-        user_code,
-        task["description"],
-        report,
-        user["toxic_level"],
-        attempt_count,
-        recent_attempts,
-        ok,
-    )
-
-    head = (
-        f"<b>Попытка №{attempt_count}</b>\n\n"
-        f"<b>Тесты</b>\n{format_tests_html(results)}\n\n"
-    )
-    tail = ""
-    if not ok:
-        tail = "\n\nМожешь прислать исправленный код сам или нажать «Дай подсказку»."
-    feedback = fit_tg_html(feedback, max(400, 4000 - len(head) - len(tail)))
-    text = head + feedback + tail
-
-    topic_id = context.user_data.get("topic_id")
+def result_markup(ok: bool, topic_id) -> InlineKeyboardMarkup:
     keyboard = []
     if not ok:
         keyboard.append(
@@ -355,9 +319,87 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard.append(
         [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
     )
-    markup = InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(keyboard)
 
-    # успех не затираем кнопками — результат остаётся, меню уходит новым сообщением
+
+def check_text(attempt_count: int, results: list, ok: bool, feedback: str = "") -> str:
+    head = (
+        f"<b>Попытка №{attempt_count}</b>\n\n"
+        f"<b>Тесты</b>\n{format_tests_html(results)}"
+    )
+    tail = ""
+    if not ok:
+        tail = "\n\nМожешь прислать исправленный код сам или нажать «Дай подсказку»."
+    if not feedback:
+        return head + tail
+    feedback = fit_tg_html(feedback, max(400, 4000 - len(head) - len(tail) - 2))
+    return head + "\n\n" + feedback + tail
+
+
+async def attach_review(
+    bot,
+    chat_id: int,
+    message_id: int,
+    ok: bool,
+    topic_id,
+    attempt_count: int,
+    results: list,
+    user_code: str,
+    condition: str,
+    report: str,
+    toxic_level: int,
+    recent_attempts: list,
+):
+    # ревью летит само, хендлер уже ответил тестами
+    try:
+        feedback = await review_solution(
+            user_code,
+            condition,
+            report,
+            toxic_level,
+            attempt_count,
+            recent_attempts,
+            ok,
+        )
+        text = check_text(attempt_count, results, ok, feedback)
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=None if ok else result_markup(ok, topic_id),
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("ревью не дописалось")
+
+
+async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    task_id = context.user_data.get("task_id")
+    if not task_id:
+        await update.message.reply_text("Сначала выбери задачу в меню.")
+        return MAIN_MENU
+
+    # Убираем кривые кавычки, заменяя из на обычные
+    user_code = fix_quotes(update.message.text)
+    wait = await update.message.reply_text("Проверяю решение...")
+
+    task = await get_task(task_id)
+    tests = json.loads(task["tests"])
+    ok, results = await run_tests(user_code, tests)
+    report = format_tests_plain(results)
+
+    user = await get_user(update.effective_user.id)
+    await add_solution(user["id"], task_id, user_code, "ok" if ok else "fail")
+    attempt_count = await get_attempt_count(user["id"], task_id)
+    recent_attempts = await get_recent_attempts(user["id"], task_id)
+    context.user_data["last_code"] = user_code
+    context.user_data["last_report"] = report
+
+    topic_id = context.user_data.get("topic_id")
+    markup = result_markup(ok, topic_id)
+    text = check_text(attempt_count, results, ok)
+
+    # тесты сразу, gpt потом допишет в это же сообщение
     if ok:
         await wait.edit_text(text, parse_mode="HTML")
         await context.bot.send_message(
@@ -367,6 +409,23 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await wait.edit_text(text, reply_markup=markup, parse_mode="HTML")
+
+    asyncio.create_task(
+        attach_review(
+            context.bot,
+            update.effective_chat.id,
+            wait.message_id,
+            ok,
+            topic_id,
+            attempt_count,
+            results,
+            user_code,
+            task["description"],
+            report,
+            user["toxic_level"],
+            recent_attempts,
+        )
+    )
     return SOLVING
 
 
