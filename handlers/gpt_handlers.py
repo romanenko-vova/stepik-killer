@@ -1,5 +1,4 @@
 import asyncio
-import html
 import json
 import logging
 from pathlib import Path
@@ -22,7 +21,7 @@ from db.zadacha_crud import (
     get_tasks_by_topic,
 )
 from services.code_runner import run_tests
-from services.tg_html import fit_tg_html
+from services.tg_html import escape_tg_text, fit_tg_html, prepare_tg_html
 from services.verify_python_code import give_hint, review_solution
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def pretty_io(text: str) -> str:
     # если в базе лежит текст с \n как символами — делаем настоящие переносы
     text = text.replace("\\n", "\n").strip()
-    return html.escape(text)
+    return escape_tg_text(text)
 
 
 def fix_quotes(code: str) -> str:
@@ -72,7 +71,7 @@ def format_tests_html(results: list[dict]) -> str:
         elif item.get("error"):
             parts.append(
                 f"<b>Тест {item['n']}:</b> ❌ ошибка\n"
-                f"<code>{html.escape(item['error'])}</code>"
+                f"<code>{escape_tg_text(item['error'])}</code>"
             )
         else:
             parts.append(
@@ -86,8 +85,8 @@ def format_tests_html(results: list[dict]) -> str:
 
 def format_task_text(task: dict) -> str:
     tests = json.loads(task["tests"])[:3]
-    title = html.escape(task["title"])
-    description = html.escape(task["description"])
+    title = escape_tg_text(task["title"])
+    description = escape_tg_text(task["description"])
 
     parts = [
         f"<b>{title}</b>\n\n",
@@ -105,7 +104,7 @@ def format_task_text(task: dict) -> str:
         "подсказка попадёт в вывод и тесты не пройдут.\n"
         "Пришли решение одним сообщением — код на Python."
     )
-    return "".join(parts)
+    return prepare_tg_html("".join(parts), 4096)
 
 
 async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -330,10 +329,11 @@ def check_text(attempt_count: int, results: list, ok: bool, feedback: str = "") 
     tail = ""
     if not ok:
         tail = "\n\nМожешь прислать исправленный код сам или нажать «Дай подсказку»."
-    if not feedback:
-        return head + tail
-    feedback = fit_tg_html(feedback, max(400, 4000 - len(head) - len(tail) - 2))
-    return head + "\n\n" + feedback + tail
+    if feedback:
+        text = head + "\n\n" + feedback + tail
+    else:
+        text = head + tail
+    return prepare_tg_html(text, 4096)
 
 
 async def attach_review(

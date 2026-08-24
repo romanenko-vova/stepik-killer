@@ -1,7 +1,39 @@
 import html
+import re
 
 # Telegram из всего HTML понимает только эти четыре тега
 OK_TAGS = ("b", "i", "code", "pre")
+
+# кавычки в тг не экранируем — иначе в чате торчит &quot;
+QUOTE_ENTS = (
+    ("&quot;", '"'),
+    ("&#34;", '"'),
+    ("&#x22;", '"'),
+    ("&#x27;", "'"),
+    ("&#39;", "'"),
+    ("&apos;", "'"),
+)
+
+
+def decode_entities(text: str) -> str:
+    # gpt часто пишет &quot; вместо кавычек — возвращаем нормальные символы
+    prev = None
+    while prev != text:
+        prev = text
+        text = html.unescape(text)
+    return text
+
+
+def escape_tg_text(text: str) -> str:
+    # в тг кавычки экранировать не надо, иначе ученик видит &quot;
+    return html.escape(decode_entities(text), quote=False)
+
+
+def restore_quotes(text: str) -> str:
+    # на всякий случай, если сущность пролезла после чистки
+    for ent, ch in QUOTE_ENTS:
+        text = text.replace(ent, ch)
+    return text
 
 
 def read_tag_name(tag: str):
@@ -70,7 +102,7 @@ def clean_tg_html(text: str) -> str:
 
     for kind, chunk in split_into_text_and_tags(text):
         if kind == "text":
-            result.append(html.escape(chunk))
+            result.append(escape_tg_text(chunk))
             continue
 
         name, closing = read_tag_name(chunk)
@@ -104,9 +136,44 @@ def clean_tg_html(text: str) -> str:
     return "".join(result)
 
 
+def prepare_tg_html(text: str, limit: int | None = None) -> str:
+    """Финальный текст в чат: валидные теги, живые кавычки, без двойного экранирования."""
+    text = restore_quotes(clean_tg_html(text))
+    if limit is not None and len(text) > limit:
+        text = restore_quotes(clean_tg_html(text[:limit] + "…"))
+    return text
+
+
 def fit_tg_html(text: str, limit: int) -> str:
     """Ужимаем текст под лимит Telegram, не ломая теги посередине."""
-    text = clean_tg_html(text)
-    if len(text) <= limit:
-        return text
-    return clean_tg_html(text[:limit] + "…")
+    return prepare_tg_html(text, limit)
+
+
+_BARE_AMP = re.compile(r"&(?!amp;|lt;|gt;|#\d+;|#x[0-9a-fA-F]+;)")
+
+
+def tg_html_problems(text: str) -> list[str]:
+    # ловим то, из-за чего в чате каша или Telegram режет сообщение
+    problems = []
+    for bad in ("&amp;quot;", "&amp;lt;", "&amp;gt;", "&quot;", "&#34;", "&apos;"):
+        if bad in text:
+            problems.append(bad)
+    if _BARE_AMP.search(text):
+        problems.append("голый &")
+    open_tags = []
+    for kind, chunk in split_into_text_and_tags(text):
+        if kind != "tag":
+            continue
+        name, closing = read_tag_name(chunk)
+        if name not in OK_TAGS:
+            continue
+        if not closing:
+            open_tags.append(name)
+            continue
+        if not open_tags or open_tags[-1] != name:
+            problems.append(f"сломан тег {chunk}")
+            continue
+        open_tags.pop()
+    if open_tags:
+        problems.append("незакрытые " + ",".join(open_tags))
+    return problems

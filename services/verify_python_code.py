@@ -1,7 +1,7 @@
 from openai import AsyncOpenAI
 
 from config.config import GPT_MODEL, OPENROUTER_API_KEY, OPENROUTER_BASE_URL
-from services.tg_html import clean_tg_html
+from services.tg_html import prepare_tg_html
 
 # тг понимает только узкий html
 TG_FORMAT = (
@@ -123,7 +123,7 @@ async def ask_gpt(system_prompt: str, user_prompt: str) -> str:
         ],
     )
     text = response.choices[0].message.content or ""
-    return clean_tg_html(text)
+    return prepare_tg_html(text)
 
 
 async def review_solution(
