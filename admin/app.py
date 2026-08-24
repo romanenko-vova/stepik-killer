@@ -1,6 +1,8 @@
 import asyncio
 import html
+import json
 import logging
+import re
 import secrets
 
 import uvicorn
@@ -88,6 +90,12 @@ pre {
   margin: 16px 0;
 }
 .meta { color: var(--muted); font-size: 13px; }
+h3 { font-size: 15px; margin: 16px 0 6px; font-weight: 600; }
+.review {
+  border-left: 3px solid var(--accent);
+  padding: 8px 0 8px 14px;
+  white-space: pre-wrap;
+}
 h1 { font-size: 28px; margin: 0; font-weight: 600; }
 h2 { font-size: 20px; margin: 28px 0 8px; }
 """
@@ -110,6 +118,49 @@ def page(title: str, body: str) -> str:
   <main>{body}</main>
 </body>
 </html>"""
+
+
+def strip_tg_html(text: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html.unescape(text).strip()
+
+
+def format_admin_tests(raw: str | None) -> str:
+    if not raw:
+        return "<p class='meta'>Отчёта тестов нет — попытка была до этой фичи.</p>"
+    try:
+        results = json.loads(raw)
+    except json.JSONDecodeError:
+        return f"<pre>{html.escape(raw)}</pre>"
+
+    parts = []
+    for item in results:
+        n = item.get("n", "?")
+        if item.get("ok"):
+            parts.append(f"<p class='ok'>Тест {n}: прошёл</p>")
+            continue
+        if item.get("timeout"):
+            parts.append(f"<p class='fail'>Тест {n}: слишком долго</p>")
+            continue
+        if item.get("error"):
+            parts.append(
+                f"<p class='fail'>Тест {n}: ошибка</p>"
+                f"<pre>{html.escape(str(item['error']))}</pre>"
+            )
+            continue
+        inp = str(item.get("input", "")).replace("\\n", "\n")
+        exp = str(item.get("expected", "")).replace("\\n", "\n")
+        got = str(item.get("actual", "")).replace("\\n", "\n")
+        parts.append(
+            f"<p class='fail'>Тест {n}: не прошёл</p>"
+            "<pre>"
+            f"Ввод:\n{html.escape(inp)}\n"
+            f"Ожидалось:\n{html.escape(exp)}\n"
+            f"Получено:\n{html.escape(got)}"
+            "</pre>"
+        )
+    return "".join(parts) or "<p class='meta'>Пустой отчёт.</p>"
 
 
 def mark_label(mark: str) -> str:
@@ -202,10 +253,17 @@ async def solutions(user_pk: int, task_id: int, _: str = Depends(require_admin))
         status_html = "ok" if item["status"] == "ok" else item["status"]
         if stale:
             status_html = "ok · старая версия задачи"
+        review = strip_tg_html(item["review"] or "")
+        if review:
+            review_html = f"<h3>Нейронка</h3><div class='review'>{html.escape(review)}</div>"
+        else:
+            review_html = "<h3>Нейронка</h3><p class='meta'>Ещё нет — либо старая попытка, либо ревью не успело записаться.</p>"
         cards.append(
             "<div class='card'>"
             f"<p class='meta'>#{item['id']} · {html.escape(str(item['created_at']))} · {html.escape(status_html)}</p>"
-            f"<pre>{html.escape(item['code'])}</pre>"
+            f"<h3>Код</h3><pre>{html.escape(item['code'])}</pre>"
+            f"<h3>Тесты</h3>{format_admin_tests(item.get('tests_json'))}"
+            f"{review_html}"
             "</div>"
         )
     body = (

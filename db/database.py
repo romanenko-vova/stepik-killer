@@ -68,6 +68,8 @@ async def create_tables(app):
         code TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'new',
         content_sig TEXT,
+        tests_json TEXT,
+        review TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -79,6 +81,8 @@ async def create_tables(app):
     await _ensure_column(conn, "tasks", "cat_key", "TEXT")
     await _ensure_column(conn, "tasks", "content_sig", "TEXT")
     await _ensure_column(conn, "solutions", "content_sig", "TEXT")
+    await _ensure_column(conn, "solutions", "tests_json", "TEXT")
+    await _ensure_column(conn, "solutions", "review", "TEXT")
     await _ensure_column(conn, "users", "first_name", "TEXT")
 
     await conn.commit()

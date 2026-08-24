@@ -19,6 +19,7 @@ from db.zadacha_crud import (
     get_stale_task_ids,
     get_task,
     get_tasks_by_topic,
+    set_solution_review,
 )
 from services.code_runner import run_tests
 from services.tg_html import escape_tg_text, fit_tg_html, prepare_tg_html
@@ -349,6 +350,7 @@ async def attach_review(
     report: str,
     toxic_level: int,
     recent_attempts: list,
+    solution_id: int | None = None,
 ):
     # ревью летит само, хендлер уже ответил тестами
     try:
@@ -361,6 +363,8 @@ async def attach_review(
             recent_attempts,
             ok,
         )
+        if solution_id:
+            await set_solution_review(solution_id, feedback)
         text = check_text(attempt_count, results, ok, feedback)
         await bot.edit_message_text(
             chat_id=chat_id,
@@ -389,7 +393,9 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report = format_tests_plain(results)
 
     user = await get_user(update.effective_user.id)
-    await add_solution(user["id"], task_id, user_code, "ok" if ok else "fail")
+    solution_id = await add_solution(
+        user["id"], task_id, user_code, "ok" if ok else "fail", results
+    )
     attempt_count = await get_attempt_count(user["id"], task_id)
     recent_attempts = await get_recent_attempts(user["id"], task_id)
     context.user_data["last_code"] = user_code
@@ -424,6 +430,7 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
             report,
             user["toxic_level"],
             recent_attempts,
+            solution_id,
         )
     )
     return SOLVING

@@ -130,7 +130,8 @@ async def student_solutions(user_pk: int, task_id: int) -> list[dict]:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             """
-            SELECT s.id, s.code, s.status, s.content_sig, s.created_at, t.content_sig AS task_sig
+            SELECT s.id, s.code, s.status, s.content_sig, s.created_at,
+                   s.tests_json, s.review, t.content_sig AS task_sig
             FROM solutions s
             JOIN tasks t ON t.id = s.task_id
             WHERE s.user_id = ? AND s.task_id = ?

@@ -1,3 +1,5 @@
+import json
+
 import aiosqlite
 
 from config.config import DB_PATH
@@ -89,17 +91,33 @@ async def get_progress(user_id: int) -> tuple[int, int, int]:
     return solved, total, stale
 
 
-async def add_solution(user_id: int, task_id: int, code: str, status: str = "new"):
+async def add_solution(
+    user_id: int,
+    task_id: int,
+    code: str,
+    status: str = "new",
+    tests_report: list | None = None,
+):
     task = await get_task(task_id)
     sig = task.get("content_sig") if task else None
+    tests_json = json.dumps(tests_report, ensure_ascii=False) if tests_report is not None else None
     async with aiosqlite.connect(DB_PATH) as conn:
         cursor = await conn.execute(
-            """INSERT INTO solutions(user_id, task_id, code, status, content_sig)
-                VALUES(?, ?, ?, ?, ?)""",
-            (user_id, task_id, code, status, sig),
+            """INSERT INTO solutions(user_id, task_id, code, status, content_sig, tests_json)
+                VALUES(?, ?, ?, ?, ?, ?)""",
+            (user_id, task_id, code, status, sig, tests_json),
         )
         await conn.commit()
         return cursor.lastrowid
+
+
+async def set_solution_review(solution_id: int, review: str):
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "UPDATE solutions SET review = ? WHERE id = ?",
+            (review, solution_id),
+        )
+        await conn.commit()
 
 
 async def get_attempt_count(user_id: int, task_id: int) -> int:
