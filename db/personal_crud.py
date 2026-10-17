@@ -25,7 +25,11 @@ async def sets_for_user(user_id: int) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
-            "SELECT * FROM personal_sets WHERE user_id = ? ORDER BY id",
+            """SELECT s.*
+               FROM personal_sets s
+               JOIN personal_set_access a ON a.set_id = s.id
+               WHERE a.user_id = ?
+               ORDER BY s.id""",
             (user_id,),
         )
         return [dict(row) for row in await cur.fetchall()]
@@ -57,14 +61,48 @@ async def get_set(set_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+async def grant_access(set_id: int, user_id: int):
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "INSERT OR IGNORE INTO personal_set_access(set_id, user_id) VALUES(?, ?)",
+            (set_id, user_id),
+        )
+        await conn.commit()
+
+
+async def user_can_see_set(user_id: int, set_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cur = await conn.execute(
+            "SELECT 1 FROM personal_set_access WHERE set_id = ? AND user_id = ?",
+            (set_id, user_id),
+        )
+        return await cur.fetchone() is not None
+
+
+async def find_set_by_title(user_id: int, title: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT * FROM personal_sets WHERE user_id = ? AND title = ?",
+            (user_id, title),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
 async def create_set(user_id: int, title: str) -> int:
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute(
             "INSERT INTO personal_sets(user_id, title) VALUES(?, ?)",
             (user_id, title),
         )
+        set_id = cur.lastrowid
+        await conn.execute(
+            "INSERT OR IGNORE INTO personal_set_access(set_id, user_id) VALUES(?, ?)",
+            (set_id, user_id),
+        )
         await conn.commit()
-        return cur.lastrowid
+        return set_id
 
 
 async def update_set_title(set_id: int, title: str):
@@ -89,6 +127,9 @@ async def delete_set(set_id: int):
             (set_id,),
         )
         await conn.execute("DELETE FROM tasks WHERE set_id = ?", (set_id,))
+        await conn.execute(
+            "DELETE FROM personal_set_access WHERE set_id = ?", (set_id,)
+        )
         await conn.execute("DELETE FROM personal_sets WHERE id = ?", (set_id,))
         await conn.commit()
 
@@ -154,17 +195,17 @@ async def personal_counts(user_id: int) -> tuple[int, int]:
         cur = await conn.execute(
             """SELECT COUNT(*)
                FROM tasks t
-               JOIN personal_sets s ON s.id = t.set_id
-               WHERE s.user_id = ?""",
+               JOIN personal_set_access a ON a.set_id = t.set_id
+               WHERE a.user_id = ?""",
             (user_id,),
         )
         total = (await cur.fetchone())[0]
         cur = await conn.execute(
             """SELECT COUNT(DISTINCT t.id)
                FROM tasks t
-               JOIN personal_sets s ON s.id = t.set_id
+               JOIN personal_set_access a ON a.set_id = t.set_id
                JOIN solutions sol ON sol.task_id = t.id
-               WHERE s.user_id = ?
+               WHERE a.user_id = ?
                  AND sol.user_id = ?
                  AND sol.status = 'ok'
                  AND sol.content_sig IS NOT NULL
@@ -181,8 +222,7 @@ async def user_can_open(user_id: int, task: dict | None) -> bool:
     # обычная задача курса — её видят все
     if not task.get("set_id"):
         return True
-    personal = await get_set(task["set_id"])
-    return bool(personal) and personal["user_id"] == user_id
+    return await user_can_see_set(user_id, task["set_id"])
 
 
 def _tests_json(tests: list[dict]) -> str:

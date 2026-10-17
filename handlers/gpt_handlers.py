@@ -9,7 +9,13 @@ from telegram.ext import ContextTypes
 
 from config.states import MAIN_MENU, MODULS, SOLVING
 from db.module_crud import get_module, get_modules
-from db.personal_crud import get_set, sets_for_user, tasks_in_set, user_can_open
+from db.personal_crud import (
+    get_set,
+    sets_for_user,
+    tasks_in_set,
+    user_can_open,
+    user_can_see_set,
+)
 from db.topic_crud import get_topic, get_topics_by_module_id
 from db.users_crud import get_user
 from db.zadacha_crud import (
@@ -563,7 +569,7 @@ async def open_personal_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_id = int(query.data.split("_")[1])
     user = await get_user(update.effective_user.id)
     personal = await get_set(set_id)
-    if not user or not personal or personal["user_id"] != user["id"]:
+    if not user or not personal or not await user_can_see_set(user["id"], set_id):
         await query.edit_message_text("Этот блок не твой.")
         return MAIN_MENU
 

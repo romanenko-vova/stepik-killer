@@ -54,7 +54,7 @@ async def create_tables(app):
         content_sig TEXT)"""
     )
 
-    # личный блок задач: видит только один ученик
+    # личный блок: владелец в user_id, кто его видит — в personal_set_access
     await conn.execute(
         """CREATE TABLE IF NOT EXISTS personal_sets(
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +62,14 @@ async def create_tables(app):
                             title TEXT NOT NULL,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)"""
+    )
+
+    # кто ещё видит блок, кроме владельца. Саша и преподаватель смотрят одни и те же
+    await conn.execute(
+        """CREATE TABLE IF NOT EXISTS personal_set_access(
+                            set_id INTEGER NOT NULL,
+                            user_id INTEGER NOT NULL,
+                            PRIMARY KEY (set_id, user_id))"""
     )
 
     await conn.execute(
@@ -101,5 +109,7 @@ async def create_tables(app):
 
     # стартовый каталог кладём сразу при запуске бота
     from db.seed import seed_if_empty
+    from db.weekend_sets import ensure_weekend_sets
 
     await seed_if_empty()
+    await ensure_weekend_sets()
