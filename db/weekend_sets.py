@@ -50,7 +50,7 @@ SATURDAY_TASKS = [
         ),
     },
     {
-        "title": "Есть ли ноль",
+        "title": "Номер первого нуля",
         "difficulty": 1,
         "description": (
             "Считай одну непустую строку целых чисел через пробел.\n\n"
@@ -74,7 +74,7 @@ SATURDAY_TASKS = [
         "title": "Чётные до первого отрицательного",
         "difficulty": 1,
         "description": (
-            "Считай одну строку целых чисел и сложи их в кортеж.\n\n"
+            "Считай одну строку целых чисел через пробел.\n\n"
             "Иди по числам по порядку, пока не встретишь отрицательное. "
             "Его и всё, что после него, не бери.\n"
             "Из того, что успел посмотреть, оставь только чётные и напечатай их кортежем.\n"
@@ -167,12 +167,10 @@ SATURDAY_TASKS = [
         "title": "До нуля без отрицательных",
         "difficulty": 2,
         "description": (
-            "Целые числа приходят по одному на строке, пока не придёт 0.\n"
-            "Ноль ввод заканчивает. После нуля ничего не читай.\n"
-            "Отрицательное тоже останавливает чтение: после него ничего не читай.\n\n"
-            "Иди циклом while. Встретил отрицательное — выведи ЕСТЬ и прерви цикл через break.\n"
-            "Если дошёл до нуля и break не было, сработает else у цикла: выведи НЕТ.\n"
-            "Ноль сам по себе не отрицательный. Флаг не заводи.\n\n"
+            "Целые числа приходят по одному на строке и заканчиваются нулём.\n"
+            "Ноль в ответ не входит. После нуля ничего не читай.\n\n"
+            "Выведи ЕСТЬ, если до нуля встретилось отрицательное число.\n"
+            "Если отрицательных не было — выведи НЕТ.\n\n"
             "Пример:\n"
             "3\n8\n-5\n4\n0\n"
             "ответ: ЕСТЬ\n\n"
@@ -186,7 +184,7 @@ SATURDAY_TASKS = [
             ("0", "НЕТ"),
             ("-4\n0", "ЕСТЬ"),
             ("2\n4\n6\n0\n-1", "НЕТ"),
-            ("-1\n5", "ЕСТЬ"),
+            ("-1\n5\n0", "ЕСТЬ"),
             ("1\n-2\n0", "ЕСТЬ"),
             ("8\n0", "НЕТ"),
         ),
@@ -348,8 +346,12 @@ async def _ensure_block(owner_id: int, viewer_ids: list[int], title: str, tasks:
         await grant_access(set_id, viewer_id)
 
     existing = {item["title"]: item for item in await tasks_in_set(set_id)}
+    # старые названия, чтобы правка заголовка не плодила вторую задачу
+    old_titles = {"Номер первого нуля": "Есть ли ноль"}
     for pos, task in enumerate(tasks):
         current = existing.get(task["title"])
+        if current is None:
+            current = existing.get(old_titles.get(task["title"], ""))
         if current is None:
             task_id = await create_personal_task(
                 set_id,
@@ -362,7 +364,8 @@ async def _ensure_block(owner_id: int, viewer_ids: list[int], title: str, tasks:
             task_id = current["id"]
             stored_tests = json.loads(current["tests"])
             same = (
-                current["description"] == task["description"]
+                current["title"] == task["title"]
+                and current["description"] == task["description"]
                 and stored_tests == task["tests"]
                 and current["difficulty"] == task["difficulty"]
             )
