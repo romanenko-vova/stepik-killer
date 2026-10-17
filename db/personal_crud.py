@@ -138,7 +138,7 @@ async def tasks_in_set(set_id: int) -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
-            "SELECT * FROM tasks WHERE set_id = ? ORDER BY id",
+            "SELECT * FROM tasks WHERE set_id = ? ORDER BY COALESCE(pos, id), id",
             (set_id,),
         )
         return [dict(row) for row in await cur.fetchall()]
@@ -173,7 +173,7 @@ async def tasks_with_status(set_id: int, user_id: int) -> list[dict]:
                 ) AS ever_ok
             FROM tasks t
             WHERE t.set_id = ?
-            ORDER BY t.id
+            ORDER BY COALESCE(t.pos, t.id), t.id
             """,
             (user_id, user_id, user_id, user_id, set_id),
         )
@@ -288,6 +288,12 @@ async def update_personal_task(
         )
         await conn.commit()
         return cur.rowcount > 0
+
+
+async def set_task_pos(task_id: int, pos: int):
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute("UPDATE tasks SET pos = ? WHERE id = ?", (pos, task_id))
+        await conn.commit()
 
 
 async def delete_personal_task(set_id: int, task_id: int) -> bool:

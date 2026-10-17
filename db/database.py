@@ -99,6 +99,8 @@ async def create_tables(app):
     await _ensure_column(conn, "tasks", "cat_key", "TEXT")
     await _ensure_column(conn, "tasks", "content_sig", "TEXT")
     await _ensure_column(conn, "tasks", "set_id", "INTEGER")
+    # порядок внутри личного блока. У задач курса пусто, они как раньше идут по id
+    await _ensure_column(conn, "tasks", "pos", "INTEGER")
     await _ensure_column(conn, "solutions", "content_sig", "TEXT")
     await _ensure_column(conn, "solutions", "tests_json", "TEXT")
     await _ensure_column(conn, "solutions", "review", "TEXT")
