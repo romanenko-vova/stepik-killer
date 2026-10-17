@@ -2,6 +2,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from config.states import MAIN_MENU
+from db.personal_crud import personal_counts
 from db.users_crud import create_user, get_user
 from db.zadacha_crud import get_progress
 
@@ -23,6 +24,10 @@ async def main_menu_text(tg_id: int) -> str:
     if stale:
         progress += f" Ещё {stale} изменились — их надо решить снова."
 
+    personal_solved, personal_total = await personal_counts(user["id"])
+    if personal_total:
+        progress += f"\nПерсональные: {personal_solved} из {personal_total}."
+
     return (
         "Тут надо решать задачи на Python.\n\n"
         "Жми «Порешать задачи», выбирай модуль и тему, пиши код одним сообщением. "
@@ -36,8 +41,24 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["in_settings"] = False
     keyboard = [
         [InlineKeyboardButton("📚 Порешать задачи", callback_data="modul_db", style="success")],
-        [InlineKeyboardButton("⚙️ Настройки", callback_data="settings", style="primary")],
     ]
+    user = await get_user(update.effective_user.id)
+    personal_total = 0
+    if user:
+        _, personal_total = await personal_counts(user["id"])
+    if personal_total:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "📌 Персональные задания",
+                    callback_data="personal",
+                    style="primary",
+                )
+            ]
+        )
+    keyboard.append(
+        [InlineKeyboardButton("⚙️ Настройки", callback_data="settings", style="primary")]
+    )
     markup = InlineKeyboardMarkup(keyboard)
     text = await main_menu_text(update.effective_user.id)
     query = update.callback_query

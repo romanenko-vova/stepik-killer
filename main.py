@@ -18,6 +18,8 @@ from db.database import create_tables
 from handlers.gpt_handlers import (
     check_solution,
     open_modul,
+    open_personal,
+    open_personal_set,
     open_task,
     open_topic,
     send_hint,
@@ -61,6 +63,7 @@ def main():
             ],
             MAIN_MENU: [
                 CallbackQueryHandler(start_modul, pattern="modul_db"),
+                CallbackQueryHandler(open_personal, pattern="^personal$"),
                 CallbackQueryHandler(open_settings, pattern="^settings$"),
             ],
             SETTINGS: [
@@ -74,6 +77,8 @@ def main():
                 CallbackQueryHandler(open_modul, pattern="^modul_[0-9]+$"),
                 CallbackQueryHandler(open_topic, pattern="^topic_[0-9]+$"),
                 CallbackQueryHandler(open_task, pattern="^task_[0-9]+$"),
+                CallbackQueryHandler(open_personal, pattern="^personal$"),
+                CallbackQueryHandler(open_personal_set, pattern="^pset_[0-9]+$"),
                 CallbackQueryHandler(start_modul, pattern="modul_db"),
                 CallbackQueryHandler(main_menu, pattern="main_menu"),
             ],
@@ -85,6 +90,8 @@ def main():
                 CallbackQueryHandler(open_modul, pattern="^modul_[0-9]+$"),
                 CallbackQueryHandler(open_topic, pattern="^topic_[0-9]+$"),
                 CallbackQueryHandler(open_task, pattern="^task_[0-9]+$"),
+                CallbackQueryHandler(open_personal, pattern="^personal$"),
+                CallbackQueryHandler(open_personal_set, pattern="^pset_[0-9]+$"),
                 CallbackQueryHandler(start_modul, pattern="modul_db"),
                 CallbackQueryHandler(main_menu, pattern="main_menu"),
             ],

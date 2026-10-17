@@ -37,7 +37,9 @@ async def get_tasks_by_topic(topic_title: str):
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
-            "SELECT * FROM tasks WHERE topic = ? ORDER BY id", (topic_title,)
+            # set_id — личные задачи, в общую тему их не мешаем
+            "SELECT * FROM tasks WHERE topic = ? AND set_id IS NULL ORDER BY id",
+            (topic_title,),
         )
         tasks = await cur.fetchall()
         for i in range(len(tasks)):
@@ -45,29 +47,32 @@ async def get_tasks_by_topic(topic_title: str):
         return tasks
 
 
-async def get_solved_task_ids(user_id: int) -> set[int]:
+async def get_solved_task_ids(user_id: int, catalog_only: bool = False) -> set[int]:
     # только те, что закрыты на ТЕКУЩЕЙ версии условия
+    catalog = "AND t.set_id IS NULL" if catalog_only else ""
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute(
-            """SELECT DISTINCT s.task_id
+            f"""SELECT DISTINCT s.task_id
                FROM solutions s
                JOIN tasks t ON t.id = s.task_id
                WHERE s.user_id = ?
                  AND s.status = 'ok'
                  AND s.content_sig IS NOT NULL
-                 AND s.content_sig = t.content_sig""",
+                 AND s.content_sig = t.content_sig
+                 {catalog}""",
             (user_id,),
         )
         rows = await cur.fetchall()
         return {row[0] for row in rows}
 
 
-async def get_stale_task_ids(user_id: int) -> set[int]:
+async def get_stale_task_ids(user_id: int, catalog_only: bool = False) -> set[int]:
     # когда-то решил, но задача с тех пор поменялась
-    solved = await get_solved_task_ids(user_id)
+    solved = await get_solved_task_ids(user_id, catalog_only=catalog_only)
+    catalog = "AND t.set_id IS NULL" if catalog_only else ""
     async with aiosqlite.connect(DB_PATH) as conn:
         cur = await conn.execute(
-            """SELECT DISTINCT s.task_id
+            f"""SELECT DISTINCT s.task_id
                FROM solutions s
                JOIN tasks t ON t.id = s.task_id
                WHERE s.user_id = ?
@@ -75,7 +80,8 @@ async def get_stale_task_ids(user_id: int) -> set[int]:
                  AND (
                    s.content_sig IS NULL
                    OR s.content_sig != t.content_sig
-                 )""",
+                 )
+                 {catalog}""",
             (user_id,),
         )
         rows = await cur.fetchall()
@@ -83,11 +89,12 @@ async def get_stale_task_ids(user_id: int) -> set[int]:
 
 
 async def get_progress(user_id: int) -> tuple[int, int, int]:
+    # личные задачи в общий прогресс курса не входят
     async with aiosqlite.connect(DB_PATH) as conn:
-        cur = await conn.execute("SELECT COUNT(*) FROM tasks")
+        cur = await conn.execute("SELECT COUNT(*) FROM tasks WHERE set_id IS NULL")
         total = (await cur.fetchone())[0]
-    solved = len(await get_solved_task_ids(user_id))
-    stale = len(await get_stale_task_ids(user_id))
+    solved = len(await get_solved_task_ids(user_id, catalog_only=True))
+    stale = len(await get_stale_task_ids(user_id, catalog_only=True))
     return solved, total, stale
 
 

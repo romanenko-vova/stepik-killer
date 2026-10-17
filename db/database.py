@@ -54,6 +54,16 @@ async def create_tables(app):
         content_sig TEXT)"""
     )
 
+    # личный блок задач: видит только один ученик
+    await conn.execute(
+        """CREATE TABLE IF NOT EXISTS personal_sets(
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            user_id INTEGER NOT NULL,
+                            title TEXT NOT NULL,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)"""
+    )
+
     await conn.execute(
         """CREATE TABLE IF NOT EXISTS catalog_meta(
                             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -80,6 +90,7 @@ async def create_tables(app):
     await _ensure_column(conn, "tasks", "image", "TEXT")
     await _ensure_column(conn, "tasks", "cat_key", "TEXT")
     await _ensure_column(conn, "tasks", "content_sig", "TEXT")
+    await _ensure_column(conn, "tasks", "set_id", "INTEGER")
     await _ensure_column(conn, "solutions", "content_sig", "TEXT")
     await _ensure_column(conn, "solutions", "tests_json", "TEXT")
     await _ensure_column(conn, "solutions", "review", "TEXT")

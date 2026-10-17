@@ -14,7 +14,7 @@ def person_name(user: dict) -> str:
 async def list_students() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT COUNT(*) FROM tasks")
+        cur = await conn.execute("SELECT COUNT(*) FROM tasks WHERE set_id IS NULL")
         total = (await cur.fetchone())[0]
         cur = await conn.execute(
             """
@@ -29,6 +29,7 @@ async def list_students() -> list[dict]:
                     FROM solutions s
                     JOIN tasks t ON t.id = s.task_id
                     WHERE s.user_id = u.id
+                      AND t.set_id IS NULL
                       AND s.status = 'ok'
                       AND s.content_sig IS NOT NULL
                       AND s.content_sig = t.content_sig
@@ -38,6 +39,7 @@ async def list_students() -> list[dict]:
                     FROM solutions s
                     JOIN tasks t ON t.id = s.task_id
                     WHERE s.user_id = u.id
+                      AND t.set_id IS NULL
                       AND s.status = 'ok'
                       AND (
                         s.content_sig IS NULL
@@ -48,6 +50,7 @@ async def list_students() -> list[dict]:
                         FROM solutions s2
                         JOIN tasks t2 ON t2.id = s2.task_id
                         WHERE s2.user_id = u.id
+                          AND t2.set_id IS NULL
                           AND s2.status = 'ok'
                           AND s2.content_sig IS NOT NULL
                           AND s2.content_sig = t2.content_sig
@@ -108,6 +111,7 @@ async def student_tasks(user_pk: int) -> list[dict]:
                       AND s.status = 'ok'
                 ) AS ever_ok
             FROM tasks t
+            WHERE t.set_id IS NULL
             ORDER BY t.id
             """,
             (user_pk, user_pk, user_pk, user_pk, user_pk),

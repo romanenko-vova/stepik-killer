@@ -12,8 +12,9 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from config.config import ADMIN_HOST, ADMIN_PASSWORD, ADMIN_PORT, ADMIN_USER
 from db.admin_crud import list_students, person_name, student_solutions, student_tasks
+from db.personal_crud import sets_for_user, tasks_in_set
 from db.users_crud import get_user_by_id
-from db.zadacha_crud import get_task
+from db.zadacha_crud import get_solved_task_ids, get_task
 
 security = HTTPBasic()
 app = FastAPI(title="Stepik Killer admin")
@@ -98,6 +99,38 @@ h3 { font-size: 15px; margin: 16px 0 6px; font-weight: 600; }
 }
 h1 { font-size: 28px; margin: 0; font-weight: 600; }
 h2 { font-size: 20px; margin: 28px 0 8px; }
+nav { margin-top: 10px; }
+nav a { margin-right: 16px; }
+label { display: block; margin: 14px 0 4px; color: var(--muted); font-size: 14px; }
+input[type="text"], select, textarea {
+  width: 100%;
+  max-width: 720px;
+  background: #0e0c0a;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+}
+textarea { min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+button, .btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #1a140c;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+button.danger { background: var(--fail); }
+button.ghost, .ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.btn:hover { text-decoration: none; }
 """
 
 
@@ -114,6 +147,10 @@ def page(title: str, body: str) -> str:
   <header>
     <h1><a href="/">Админка</a></h1>
     <p>Романенко Учит — прогресс и сданные решения</p>
+    <nav>
+      <a href="/">Ученики</a>
+      <a href="/personal">Персональные задания</a>
+    </nav>
   </header>
   <main>{body}</main>
 </body>
@@ -225,11 +262,14 @@ async def student(user_pk: int, _: str = Depends(require_admin)):
             "</tr>"
         )
     name = html.escape(person_name(user))
+    personal_html = await _personal_block(user_pk)
     body = (
         f"<p><a href='/'>← все ученики</a></p>"
         f"<h2>{name}</h2>"
         f"<p class='meta'>tg {user['id_tg']}"
         f"{' · @' + html.escape(user['username']) if user.get('username') else ''}</p>"
+        + personal_html
+        + "<h2>Курс</h2>"
         "<table><thead><tr><th>Тема</th><th>Задача</th><th>Статус</th><th>Попыток</th><th>Последняя</th>"
         "</tr></thead><tbody>"
         + "".join(rows)
@@ -275,6 +315,28 @@ async def solutions(user_pk: int, task_id: int, _: str = Depends(require_admin))
     return page(task["title"], body)
 
 
+async def _personal_block(user_pk: int) -> str:
+    sets = await sets_for_user(user_pk)
+    solved = await get_solved_task_ids(user_pk)
+    lines = [
+        "<h2>Персональные задания</h2>",
+        f"<p><a class='btn' href='/personal/new?user={user_pk}'>Новый блок для этого ученика</a></p>",
+    ]
+    if not sets:
+        lines.append("<p class='meta'>Личных блоков пока нет.</p>")
+        return "".join(lines)
+    items = []
+    for personal in sets:
+        tasks = await tasks_in_set(personal["id"])
+        done = sum(1 for task in tasks if task["id"] in solved)
+        items.append(
+            f"<li><a href='/personal/{personal['id']}'>{html.escape(personal['title'])}</a>"
+            f" — {done} из {len(tasks)}</li>"
+        )
+    lines.append("<ul>" + "".join(items) + "</ul>")
+    return "".join(lines)
+
+
 async def start_admin():
     if not ADMIN_PASSWORD:
         logging.warning("ADMIN_PASSWORD не задан — админка не стартует")
@@ -289,3 +351,9 @@ async def start_admin():
     server.install_signal_handlers = False
     logging.info("Админка на http://%s:%s", ADMIN_HOST, ADMIN_PORT)
     asyncio.create_task(server.serve())
+
+
+# внизу, чтобы page и require_admin уже существовали
+from admin.personal import router  # noqa: E402
+
+app.include_router(router)

@@ -13,6 +13,17 @@ async def get_user(user_id: int):
         return dict(user)
 
 
+async def list_users() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            """SELECT id, id_tg, username, first_name
+               FROM users
+               ORDER BY first_name, username, id"""
+        )
+        return [dict(row) for row in await cur.fetchall()]
+
+
 async def get_user_by_id(pk: int):
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row

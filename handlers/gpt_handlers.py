@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes
 
 from config.states import MAIN_MENU, MODULS, SOLVING
 from db.module_crud import get_module, get_modules
+from db.personal_crud import get_set, sets_for_user, tasks_in_set, user_can_open
 from db.topic_crud import get_topic, get_topics_by_module_id
 from db.users_crud import get_user
 from db.zadacha_crud import (
@@ -235,11 +236,34 @@ async def open_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     task_id = int(query.data.split("_")[1])
     task = await get_task(task_id)
-    context.user_data["task_id"] = task_id
+    user = await get_user(update.effective_user.id)
+    if not user or not await user_can_open(user["id"], task):
+        context.user_data.pop("task_id", None)
+        await query.edit_message_text("Этой задачи нет или она не твоя.")
+        return MAIN_MENU
 
+    context.user_data["task_id"] = task_id
+    set_id = task.get("set_id")
     topic_id = context.user_data.get("topic_id")
+    if set_id:
+        context.user_data["personal_set_id"] = set_id
+        context.user_data.pop("topic_id", None)
+        topic_id = None
+    else:
+        context.user_data.pop("personal_set_id", None)
+
     keyboard = []
-    if topic_id:
+    if set_id:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "К моим задачам",
+                    callback_data=f"pset_{set_id}",
+                    style="primary",
+                )
+            ]
+        )
+    elif topic_id:
         keyboard.append(
             [
                 InlineKeyboardButton(
@@ -294,7 +318,7 @@ def task_image_path(task: dict) -> Path | None:
     return path
 
 
-def result_markup(ok: bool, topic_id) -> InlineKeyboardMarkup:
+def result_markup(ok: bool, topic_id, set_id=None) -> InlineKeyboardMarkup:
     keyboard = []
     if not ok:
         keyboard.append(
@@ -306,7 +330,17 @@ def result_markup(ok: bool, topic_id) -> InlineKeyboardMarkup:
                 )
             ]
         )
-    if topic_id:
+    if set_id:
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "К моим задачам",
+                    callback_data=f"pset_{set_id}",
+                    style="success" if ok else "primary",
+                )
+            ]
+        )
+    elif topic_id:
         keyboard.append(
             [
                 InlineKeyboardButton(
@@ -343,6 +377,7 @@ async def attach_review(
     message_id: int,
     ok: bool,
     topic_id,
+    set_id,
     attempt_count: int,
     results: list,
     user_code: str,
@@ -371,7 +406,7 @@ async def attach_review(
             message_id=message_id,
             text=text,
             parse_mode="HTML",
-            reply_markup=None if ok else result_markup(ok, topic_id),
+            reply_markup=None if ok else result_markup(ok, topic_id, set_id),
         )
     except Exception:
         logging.getLogger(__name__).exception("ревью не дописалось")
@@ -383,16 +418,20 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Сначала выбери задачу в меню.")
         return MAIN_MENU
 
+    task = await get_task(task_id)
+    user = await get_user(update.effective_user.id)
+    if not user or not await user_can_open(user["id"], task):
+        await update.message.reply_text("Эта задача не твоя или её уже нет.")
+        return MAIN_MENU
+
     # Убираем кривые кавычки, заменяя из на обычные
     user_code = fix_quotes(update.message.text)
     wait = await update.message.reply_text("Проверяю решение...")
 
-    task = await get_task(task_id)
     tests = json.loads(task["tests"])
     ok, results = await run_tests(user_code, tests)
     report = format_tests_plain(results)
 
-    user = await get_user(update.effective_user.id)
     solution_id = await add_solution(
         user["id"], task_id, user_code, "ok" if ok else "fail", results
     )
@@ -401,8 +440,9 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["last_code"] = user_code
     context.user_data["last_report"] = report
 
-    topic_id = context.user_data.get("topic_id")
-    markup = result_markup(ok, topic_id)
+    set_id = task.get("set_id")
+    topic_id = None if set_id else context.user_data.get("topic_id")
+    markup = result_markup(ok, topic_id, set_id)
     text = check_text(attempt_count, results, ok)
 
     # тесты сразу, gpt потом допишет в это же сообщение
@@ -423,6 +463,7 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
             wait.message_id,
             ok,
             topic_id,
+            set_id,
             attempt_count,
             results,
             user_code,
@@ -447,9 +488,13 @@ async def send_hint(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Сначала пришли решение.")
         return SOLVING
 
-    wait = await query.message.reply_text("Думаю над подсказкой...")
     task = await get_task(task_id)
     user = await get_user(update.effective_user.id)
+    if not user or not await user_can_open(user["id"], task):
+        await query.message.reply_text("Эта задача не твоя или её уже нет.")
+        return SOLVING
+
+    wait = await query.message.reply_text("Думаю над подсказкой...")
     attempt_count = await get_attempt_count(user["id"], task_id)
     recent_attempts = await get_recent_attempts(user["id"], task_id)
 
@@ -464,3 +509,94 @@ async def send_hint(update: Update, context: ContextTypes.DEFAULT_TYPE):
     hint = fit_tg_html(hint, 4000)
     await wait.edit_text(hint, parse_mode="HTML")
     return SOLVING
+
+
+def clip_button(title: str) -> str:
+    # у кнопки в телеграме короткий лимит, длинное название обрезаем
+    if len(title) <= 48:
+        return title
+    return title[:45] + "..."
+
+
+async def open_personal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user = await get_user(update.effective_user.id)
+    sets = await sets_for_user(user["id"]) if user else []
+    back = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]]
+    )
+    if not sets:
+        await query.edit_message_text("Персональных заданий пока нет.", reply_markup=back)
+        return MAIN_MENU
+
+    solved_ids = await get_solved_task_ids(user["id"])
+    keyboard = []
+    for personal in sets:
+        tasks = await tasks_in_set(personal["id"])
+        done = sum(1 for task in tasks if task["id"] in solved_ids)
+        label = f"{clip_button(personal['title'])} ({done}/{len(tasks)})"
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f"pset_{personal['id']}",
+                    style="primary",
+                )
+            ]
+        )
+    keyboard.append(
+        [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
+    )
+    await query.edit_message_text(
+        "Персональные задания.\nВыбери блок:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+    return MODULS
+
+
+async def open_personal_set(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    set_id = int(query.data.split("_")[1])
+    user = await get_user(update.effective_user.id)
+    personal = await get_set(set_id)
+    if not user or not personal or personal["user_id"] != user["id"]:
+        await query.edit_message_text("Этот блок не твой.")
+        return MAIN_MENU
+
+    tasks = await tasks_in_set(set_id)
+    solved_ids = await get_solved_task_ids(user["id"])
+    stale_ids = await get_stale_task_ids(user["id"])
+    keyboard = []
+    for task in tasks:
+        title = clip_button(task["title"])
+        style = "primary"
+        if task["id"] in solved_ids:
+            title = f"✅ {title}"
+            style = "success"
+        elif task["id"] in stale_ids:
+            title = f"🔄 {title}"
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    title,
+                    callback_data=f"task_{task['id']}",
+                    style=style,
+                )
+            ]
+        )
+    keyboard.append(
+        [InlineKeyboardButton("К блокам", callback_data="personal", style="primary")]
+    )
+    keyboard.append(
+        [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
+    )
+    if tasks:
+        text = f"{personal['title']}\nВыбери задачу:"
+    else:
+        text = f"{personal['title']}\nПока пусто — задачи ещё не добавили."
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    return MODULS
