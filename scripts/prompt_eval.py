@@ -5,19 +5,16 @@
 
 Берёт уникальные попытки (задача + код) из таблицы solutions SQLite-копии,
 заново гоняет их через песочницу, чтобы отчёт тестов был честным,
-и спрашивает ревью у старого промпта (из git) и у нового.
+и спрашивает ревью у одной или нескольких моделей (--models через запятую).
 Если реальных попыток меньше лимита — добивает типовыми ошибками
 на задачах каталога, с пометкой «синтетика».
 """
 
 import argparse
 import asyncio
-import importlib.util
 import json
 import sqlite3
-import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -28,9 +25,6 @@ from handlers.gpt_handlers import format_tests_plain  # noqa: E402
 from services import verify_python_code as new_prompt  # noqa: E402
 from services.code_runner import run_tests  # noqa: E402
 from openai.resources.chat.completions import AsyncCompletions  # noqa: E402
-
-# коммит, где лежит прошлая версия промптов
-OLD_PROMPT_REV = "a7528fe"
 
 CATALOG = json.loads((ROOT / "db" / "catalog.json").read_text(encoding="utf-8"))
 TASKS_BY_TITLE = {
@@ -60,20 +54,6 @@ SYNTHETIC = [
 ]
 
 
-def load_old_prompt():
-    # прошлая версия модуля прямо из git, чтобы сравнение было честным
-    source = subprocess.run(
-        ["git", "show", f"{OLD_PROMPT_REV}:services/verify_python_code.py"],
-        cwd=ROOT, capture_output=True, text=True, check=True,
-    ).stdout
-    tmp = Path(tempfile.mkdtemp()) / "old_verify.py"
-    tmp.write_text(source, encoding="utf-8")
-    spec = importlib.util.spec_from_file_location("old_verify", tmp)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def real_attempts(db_path: str, limit: int) -> list[dict]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -91,7 +71,7 @@ def real_attempts(db_path: str, limit: int) -> list[dict]:
             continue
         seen.add(key)
         history = conn.execute(
-            """SELECT code, status, review FROM solutions
+            """SELECT id, code, status, review FROM solutions
                WHERE user_id = ? AND task_id = ? AND id <= ?
                ORDER BY id DESC LIMIT 3""",
             (row["user_id"], row["task_id"], row["id"]),
@@ -103,14 +83,16 @@ def real_attempts(db_path: str, limit: int) -> list[dict]:
         picked.append(
             {
                 "source": f"реальная, solution #{row['id']}",
+                "sol_id": row["id"],
                 "title": row["title"],
                 "description": row["description"],
                 "tests": json.loads(row["tests"]),
                 "code": row["code"],
                 "attempt": attempt_no,
-                # старые ревью не подмешиваем: их писал старый промпт
+                # старые ревью не подмешиваем: их писал старый промпт.
+                # Вместо них main() подставит ответы той же модели на прошлые попытки
                 "history": [
-                    {"code": h["code"], "status": h["status"]} for h in reversed(history)
+                    {"id": h["id"], "code": h["code"], "status": h["status"]} for h in reversed(history)
                 ],
                 "note": "",
             }
@@ -179,8 +161,27 @@ async def timed(fn, *args):
     return text, time.monotonic() - started, dict(LAST_USAGE)
 
 
-def render_case(n: int, case: dict, ok: bool, answer: str, old_answer: str | None = None) -> list[str]:
-    """Один блок отчёта: задача, код, ответ бота. Ответ — как в чате, без HTML-тегов."""
+MODEL_NAMES = {
+    "x-ai/grok-4.3": "Grok 4.3",
+    "anthropic/claude-sonnet-5.5": "Claude Sonnet 5.5",
+    "deepseek/deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
+}
+
+
+def model_name(model: str) -> str:
+    return MODEL_NAMES.get(model, model)
+
+
+def panch(answer: str) -> str:
+    # первая непустая строка ответа — то, что попадает на скриншот
+    for line in new_prompt.strip_html(answer).splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def render_case(n: int, case: dict, ok: bool, answers: list[tuple[str, str]]) -> list[str]:
+    """Один блок: задача, код, ответ каждой модели. Ответы — как в чате, без HTML-тегов."""
     status = "✅ тесты прошли" if ok else "❌ тесты не прошли"
     source = "синтетика" if case["source"] == "синтетика" else "реальная попытка"
     note = f", {case['note']}" if case["note"] else ""
@@ -199,13 +200,9 @@ def render_case(n: int, case: dict, ok: bool, answer: str, old_answer: str | Non
         case["code"],
         "```",
         "",
-        "**Ответ бота**",
-        "",
-        "> " + new_prompt.strip_html(answer).replace("\n", "\n> "),
-        "",
     ]
-    if old_answer is not None:
-        lines += ["**Старый промпт**", "", "> " + new_prompt.strip_html(old_answer).replace("\n", "\n> "), ""]
+    for model, answer in answers:
+        lines += [f"**{model_name(model)}**", "", "> " + new_prompt.strip_html(answer).replace("\n", "\n> "), ""]
     return lines
 
 
@@ -214,50 +211,69 @@ async def main():
     parser.add_argument("db")
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--out", default=str(ROOT / "PROMPT_EVAL.md"))
-    parser.add_argument("--compare", action="store_true", help="добавить ответ старого промпта из git")
+    parser.add_argument("--models", default=new_prompt.GPT_MODEL, help="через запятую")
     args = parser.parse_args()
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
 
     cases = real_attempts(args.db, args.limit)
     real_count = len(cases)
     cases += synthetic_attempts(args.limit - real_count)
-    old_prompt = load_old_prompt() if args.compare else None
+
+    # тесты гоняем один раз на попытку
+    for case in cases:
+        case["ok"], results = await run_tests(case["code"], case["tests"])
+        case["report"] = format_tests_plain(results)
+
+    # попытки одного ученика по задаче — по порядку, чтобы модель видела свои прошлые ревью
+    order = sorted(range(len(cases)), key=lambda i: cases[i].get("sol_id") or 0)
+    answers: dict[int, dict[str, str]] = {i: {} for i in range(len(cases))}
+    stats = {m: {"cost": [], "time": [], "words": []} for m in models}
+    for model in models:
+        reviews_by_sol: dict[int, str] = {}
+        for i in order:
+            case = cases[i]
+            history = [
+                {**h, "review": reviews_by_sol.get(h.get("id"))} if h.get("id") else h
+                for h in case["history"]
+            ]
+            answer, took, usage = await timed(
+                new_prompt.review_solution,
+                case["code"], case["description"], case["report"], 3, case["attempt"], history, case["ok"], model,
+            )
+            answers[i][model] = answer
+            if case.get("sol_id"):
+                reviews_by_sol[case["sol_id"]] = answer
+            stats[model]["cost"].append(usage.get("cost", 0.0))
+            stats[model]["time"].append(took)
+            stats[model]["words"].append(len(panch(answer).split()))
+            print(f"{model_name(model)} [{i + 1}] {case['title']} {took:.1f}s", flush=True)
 
     lines = [
-        "# Разносы бота: 20 попыток",
+        "# Разносы бота: 20 попыток, три модели",
         "",
-        f"Режим «Без пощады», модель `{new_prompt.GPT_MODEL}`. "
+        "Режим «Без пощады», промпт v2: сеньор в пятницу вечером, панч до 8 слов. "
         + (
-            f"Все {real_count} попыток реальные, из базы `{Path(args.db).name}`."
+            f"Все {real_count} попыток реальные: последние уникальные решения учеников из копии прод-базы, имён нет."
             if real_count == len(cases)
-            else f"Реальных попыток {real_count}, остальные {len(cases) - real_count} — типовые ошибки на задачах каталога."
+            else f"Реальных попыток {real_count}, остальные — типовые ошибки на задачах каталога."
         ),
         "",
-        "Первая строка ответа — то, что попадёт на скриншот.",
+        "Первая строка ответа — то, что попадёт на скриншот. Прошлая версия — в `PROMPT_EVAL_v1.md`.",
         "",
+        "| Модель | Ответ, с | Цена ответа | Слов в панче, в среднем | Панч ≤ 8 слов |",
+        "|---|---|---|---|---|",
     ]
-    costs, times = [], []
-
+    for model in models:
+        st = stats[model]
+        n = len(st["time"])
+        short = sum(1 for w in st["words"] if w <= 8)
+        lines.append(
+            f"| {model_name(model)} | {sum(st['time']) / n:.0f} | ${sum(st['cost']) / n:.4f} | "
+            f"{sum(st['words']) / n:.1f} | {short} из {n} |"
+        )
+    lines.append("")
     for n, case in enumerate(cases, 1):
-        ok, results = await run_tests(case["code"], case["tests"])
-        report = format_tests_plain(results)
-        args_common = (case["code"], case["description"], report, 3, case["attempt"], case["history"], ok)
-
-        answer, took, usage = await timed(new_prompt.review_solution, *args_common)
-        old_answer = None
-        if old_prompt is not None:
-            old_answer, _, _ = await timed(old_prompt.review_solution, *args_common)
-        costs.append(usage.get("cost", 0.0))
-        times.append(took)
-        print(f"[{n}/{len(cases)}] {case['title']} {took:.1f}s", flush=True)
-        lines += render_case(n, case, ok, answer, old_answer)
-
-    lines += [
-        "---",
-        "",
-        f"<sub>Ответ в среднем {sum(times) / len(times):.0f} с, ${sum(costs) / len(costs):.4f}. "
-        f"Весь прогон ${sum(costs):.3f}.</sub>",
-        "",
-    ]
+        lines += render_case(n, case, case["ok"], [(m, answers[n - 1][m]) for m in models])
     Path(args.out).write_text("\n".join(lines), encoding="utf-8")
     print("Готово:", args.out)
 
