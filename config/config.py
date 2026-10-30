@@ -28,6 +28,8 @@ DOCKER_PARALLEL = int(os.getenv("DOCKER_PARALLEL") or "3")
 REVIEW_MAX_TOKENS = int(os.getenv("REVIEW_MAX_TOKENS") or "1500")
 REVIEW_TEMPERATURE = float(os.getenv("REVIEW_TEMPERATURE") or "0.9")
 
+# оффер выключен, пока тексты и ссылка — черновики: включить OFFER_ENABLED=true в .env
+OFFER_ENABLED = (os.getenv("OFFER_ENABLED") or "").lower() in ("1", "true", "yes")
 # ЧЕРНОВИК: ссылка на пробный урок, поменять на настоящую
 TRIAL_URL = os.getenv("TRIAL_URL") or "https://romanenkouchit.ru/?utm_source=nottoxicbot"
 # оффер: после стольких решённых задач — сразу

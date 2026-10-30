@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy import update as sql_update
 
 import handlers.gpt_handlers as gh
+import handlers.offer as offer_module
 from db.database import get_session, on_startup
 from db.models import Event, User
 from db.offer_crud import users_due_for_offer
@@ -24,6 +25,28 @@ def test_levels():
     assert "Новый уровень" in progress_text(2, 3)
     assert "Новый уровень" not in progress_text(3, 4)
     assert "До следующего — 1" in progress_text(3, 4)
+
+
+@pytest.fixture(autouse=True)
+def offer_on(monkeypatch):
+    # в проде оффер выключен, пока тексты черновые; тут проверяем его логику
+    monkeypatch.setattr(offer_module, "OFFER_ENABLED", True)
+
+
+async def test_offer_disabled_sends_nothing(monkeypatch, no_docker_no_llm):
+    monkeypatch.setattr(offer_module, "OFFER_ENABLED", False)
+    await on_startup()
+    bot = FakeBot()
+    upd, _ = make_update(tg_id=6100, bot=bot)
+    context = make_context(bot)
+    await start_handler(upd, context)
+    user = await get_user(6100)
+    for _ in range(11):
+        task = await next_task_for(user["id"])
+        context.user_data["task_id"] = task["id"]
+        upd, _ = make_update(tg_id=6100, text="ok", bot=bot)
+        await gh.check_solution(upd, context)
+    assert not any("Первый урок бесплатный" in m["text"] for m in bot.sent)
 
 
 @pytest.fixture

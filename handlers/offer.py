@@ -17,6 +17,7 @@ from telegram.ext import Application, ContextTypes
 
 from config.config import (
     OFFER_AFTER_DAYS,
+    OFFER_ENABLED,
     OFFER_AFTER_SOLVED,
     OFFER_MAX_SHOWS,
     OFFER_MIN_SOLVED,
@@ -68,7 +69,7 @@ async def send_offer(bot, user_id: int, chat_id: int, shows_before: int, solved:
 
 
 async def maybe_offer_after_solve(bot, user: dict, chat_id: int, solved: int):
-    if solved < OFFER_AFTER_SOLVED:
+    if not OFFER_ENABLED or solved < OFFER_AFTER_SOLVED:
         return
     state = await offer_state(user["id"])
     if state["student"] or state["trial_clicked_at"] or state["offer_count"] > 0:
@@ -126,6 +127,9 @@ async def offer_tick(bot):
 
 
 async def offer_loop(app: Application):
+    if not OFFER_ENABLED:
+        logger.info("оффер выключен (OFFER_ENABLED), фоновый цикл не запускаю")
+        return
     while True:
         try:
             sent = await offer_tick(app.bot)
