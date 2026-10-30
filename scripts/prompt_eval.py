@@ -40,7 +40,8 @@ TASKS_BY_TITLE = {
     for task in topic["tasks"]
 }
 
-# типовые ошибки подростков на реальных задачах каталога
+# типовые ошибки подростков на реальных задачах каталога.
+# Каталог переписывается отдельно: задачи, которых в нём уже нет, просто пропускаются
 SYNTHETIC = [
     ("Задание 2. Калькулятор", "a = input()\nb = input()\nprint(a, '+', b, '=', a + b)\nprint(a, '*', b, '=', a * b)\nprint(a, '-', b, '=', a - b)\nprint(a, '/', b, '=', a / b)", "input без int"),
     ("Задание 1. Приветствие", "name = input('Как тебя зовут? ')\nprint('Привет, ' + name + '! Добро пожаловать в Романенко Учит.')", "текст внутри input"),
@@ -122,8 +123,12 @@ def real_attempts(db_path: str, limit: int) -> list[dict]:
 
 def synthetic_attempts(count: int) -> list[dict]:
     out = []
-    for title, code, note in SYNTHETIC[:count]:
-        task = TASKS_BY_TITLE[title]
+    for title, code, note in SYNTHETIC:
+        if len(out) >= count:
+            break
+        task = TASKS_BY_TITLE.get(title)
+        if task is None:
+            continue
         out.append(
             {
                 "source": "синтетика",
@@ -174,79 +179,79 @@ async def timed(fn, *args):
     return text, time.monotonic() - started, dict(LAST_USAGE)
 
 
+def render_case(n: int, case: dict, ok: bool, answer: str, old_answer: str | None = None) -> list[str]:
+    """Один блок отчёта: задача, код, ответ бота. Ответ — как в чате, без HTML-тегов."""
+    status = "✅ тесты прошли" if ok else "❌ тесты не прошли"
+    source = "синтетика" if case["source"] == "синтетика" else "реальная попытка"
+    note = f", {case['note']}" if case["note"] else ""
+    lines = [
+        f"## {n}. {case['title']}",
+        "",
+        f"<sub>{source}{note} · попытка №{case['attempt']} · {status}</sub>",
+        "",
+        "**Задача**",
+        "",
+        "> " + case["description"].strip().replace("\n", "\n> "),
+        "",
+        "**Код**",
+        "",
+        "```python",
+        case["code"],
+        "```",
+        "",
+        "**Ответ бота**",
+        "",
+        "> " + new_prompt.strip_html(answer).replace("\n", "\n> "),
+        "",
+    ]
+    if old_answer is not None:
+        lines += ["**Старый промпт**", "", "> " + new_prompt.strip_html(old_answer).replace("\n", "\n> "), ""]
+    return lines
+
+
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("db")
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--out", default=str(ROOT / "PROMPT_EVAL.md"))
+    parser.add_argument("--compare", action="store_true", help="добавить ответ старого промпта из git")
     args = parser.parse_args()
 
     cases = real_attempts(args.db, args.limit)
     real_count = len(cases)
     cases += synthetic_attempts(args.limit - real_count)
-    old_prompt = load_old_prompt()
+    old_prompt = load_old_prompt() if args.compare else None
 
     lines = [
-        "# Прогон промпта жёсткого режима",
+        "# Разносы бота: 20 попыток",
         "",
-        f"Модель: `{new_prompt.GPT_MODEL}`. База: `{Path(args.db).name}`. "
-        f"Реальных попыток: {real_count}, синтетики: {len(cases) - real_count}.",
-        "Слева старый промпт (уровень 3, как в проде до этой ветки), справа новый. "
-        "Тесты каждой попытки заново прогнаны в песочнице.",
+        f"Режим «Без пощады», модель `{new_prompt.GPT_MODEL}`. "
+        f"Реальных попыток {real_count}, остальные {len(cases) - real_count} — типовые ошибки на задачах каталога.",
         "",
-        "Как читать: смотри на первую жирную строку нового ответа — это то, что попадёт на скриншот. "
-        "Ставь себе галочку, если смешно, конкретно про код и без перехода на личность.",
+        "Первая строка ответа — то, что попадёт на скриншот.",
         "",
     ]
-    total_old = total_new = 0.0
-    costs_old, costs_new, tokens_new = [], [], []
+    costs, times = [], []
 
     for n, case in enumerate(cases, 1):
         ok, results = await run_tests(case["code"], case["tests"])
         report = format_tests_plain(results)
-        history = case["history"]
-        args_common = (case["code"], case["description"], report, 3, case["attempt"], history, ok)
+        args_common = (case["code"], case["description"], report, 3, case["attempt"], case["history"], ok)
 
-        old_text, old_t, old_u = await timed(old_prompt.review_solution, *args_common)
-        new_text, new_t, new_u = await timed(new_prompt.review_solution, *args_common)
-        total_old += old_t
-        total_new += new_t
-        costs_old.append(old_u.get("cost", 0.0))
-        costs_new.append(new_u.get("cost", 0.0))
-        tokens_new.append((new_u.get("prompt", 0), new_u.get("completion", 0)))
-
-        status = "тесты прошли" if ok else "тесты не прошли"
-        note = f" — {case['note']}" if case["note"] else ""
-        print(f"[{n}/{len(cases)}] {case['title']} ({case['source']}{note}) {old_t:.1f}s / {new_t:.1f}s", flush=True)
-        lines += [
-            f"## {n}. {case['title']} — {case['source']}{note}",
-            "",
-            f"Попытка №{case['attempt']}, {status}.",
-            "",
-            "```python",
-            case["code"],
-            "```",
-            "",
-            f"**Было** ({old_t:.1f} с, ${old_u.get('cost', 0):.4f}):",
-            "",
-            "> " + new_prompt.strip_html(old_text).replace("\n", "\n> "),
-            "",
-            f"**Стало** ({new_t:.1f} с, ${new_u.get('cost', 0):.4f}):",
-            "",
-            "> " + new_prompt.strip_html(new_text).replace("\n", "\n> "),
-            "",
-        ]
+        answer, took, usage = await timed(new_prompt.review_solution, *args_common)
+        old_answer = None
+        if old_prompt is not None:
+            old_answer, _, _ = await timed(old_prompt.review_solution, *args_common)
+        costs.append(usage.get("cost", 0.0))
+        times.append(took)
+        print(f"[{n}/{len(cases)}] {case['title']} {took:.1f}s", flush=True)
+        lines += render_case(n, case, ok, answer, old_answer)
 
     lines += [
         "---",
         "",
-        "| | Старый промпт | Новый промпт |",
-        "|---|---|---|",
-        f"| Среднее время ответа | {total_old / len(cases):.1f} с | {total_new / len(cases):.1f} с |",
-        f"| Средняя цена ответа | ${sum(costs_old) / len(cases):.4f} | ${sum(costs_new) / len(cases):.4f} |",
-        f"| Всего за прогон | ${sum(costs_old):.3f} | ${sum(costs_new):.3f} |",
-        f"| Токены нового: вход / выход в среднем | | "
-        f"{sum(t[0] for t in tokens_new) // len(cases)} / {sum(t[1] for t in tokens_new) // len(cases)} |",
+        f"<sub>Ответ в среднем {sum(times) / len(times):.0f} с, ${sum(costs) / len(costs):.4f}. "
+        f"Весь прогон ${sum(costs):.3f}.</sub>",
         "",
     ]
     Path(args.out).write_text("\n".join(lines), encoding="utf-8")

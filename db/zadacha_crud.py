@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, func, or_, select, update
 
+from config.starter import STARTER_KEYS
 from db.database import as_dict, get_session
 from db.models import Event, Solution, Task
 
@@ -180,38 +181,38 @@ async def hints_today(user_id: int) -> int:
         ).scalar_one()
 
 
+async def _starter_tasks(session) -> list[Task]:
+    # задачи из config/starter.py в заданном порядке; неизвестные ключи пропускаем
+    if not STARTER_KEYS:
+        return []
+    rows = (
+        await session.execute(
+            select(Task).where(Task.cat_key.in_(STARTER_KEYS), Task.set_id.is_(None))
+        )
+    ).scalars().all()
+    by_key = {task.cat_key: task for task in rows}
+    return [by_key[key] for key in STARTER_KEYS if key in by_key]
+
+
 async def starter_progress(user_id: int) -> tuple[int, int]:
     async with get_session() as session:
-        total = (
-            await session.execute(
-                select(func.count()).select_from(Task).where(Task.starter_pos.is_not(None))
-            )
-        ).scalar_one()
-    solved_ids = await get_solved_task_ids(user_id)
-    async with get_session() as session:
-        starter_ids = set(
-            (await session.execute(select(Task.id).where(Task.starter_pos.is_not(None)))).scalars().all()
-        )
-    return len(solved_ids & starter_ids), total
+        starter_ids = [task.id for task in await _starter_tasks(session)]
+    solved = await get_solved_task_ids(user_id)
+    return sum(1 for task_id in starter_ids if task_id in solved), len(starter_ids)
 
 
 async def next_task_for(user_id: int) -> dict | None:
-    """Следующая нерешённая: сначала стартовый набор по порядку, потом курс по месту в каталоге."""
+    """Следующая нерешённая: сначала стартовый набор из конфига, потом курс по порядку каталога."""
     solved = await get_solved_task_ids(user_id)
     async with get_session() as session:
-        starter = (
-            await session.execute(
-                select(Task).where(Task.starter_pos.is_not(None)).order_by(Task.starter_pos)
-            )
-        ).scalars().all()
-        for task in starter:
+        for task in await _starter_tasks(session):
             if task.id not in solved:
                 return as_dict(task)
         course = (
             await session.execute(
                 select(Task)
-                .where(Task.set_id.is_(None), Task.starter_pos.is_(None))
-                # модуль-тема из ключа, дальше место в теме: разминка идёт первой
+                .where(Task.set_id.is_(None))
+                # модуль-тема из ключа, дальше место в теме
                 .order_by(func.substr(Task.cat_key, 1, 5), func.coalesce(Task.pos, Task.id), Task.id)
             )
         ).scalars().all()

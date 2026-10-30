@@ -1,4 +1,4 @@
-"""Онбординг: источник пользователя, стартовый набор задач, события воронки
+"""Онбординг: источник пользователя и события воронки
 
 Revision ID: 002_onboarding
 Revises: 001_initial
@@ -19,8 +19,6 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.add_column("users", sa.Column("source", sa.String(length=64), nullable=True))
     op.create_index("ix_users_source", "users", ["source"])
-    op.add_column("tasks", sa.Column("starter_pos", sa.Integer(), nullable=True))
-    op.create_index("ix_tasks_starter_pos", "tasks", ["starter_pos"])
 
     op.create_table(
         "events",
@@ -38,7 +36,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("events")
-    op.drop_index("ix_tasks_starter_pos", table_name="tasks")
-    op.drop_column("tasks", "starter_pos")
     op.drop_index("ix_users_source", table_name="users")
     op.drop_column("users", "source")

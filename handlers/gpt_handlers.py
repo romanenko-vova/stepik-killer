@@ -99,41 +99,22 @@ def format_tests_html(results: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-VISIBLE_TESTS = 2
-
-
-def plural(n: int, one: str, few: str, many: str) -> str:
-    if n % 100 in (11, 12, 13, 14):
-        return many
-    if n % 10 == 1:
-        return one
-    if n % 10 in (2, 3, 4):
-        return few
-    return many
-
-
 def format_task_text(task: dict) -> str:
-    all_tests = json.loads(task["tests"])
-    # показываем два примера: если видны все тесты, их проходят хардкодом по вводу
-    tests = all_tests[:VISIBLE_TESTS]
-    hidden = len(all_tests) - len(tests)
+    tests = json.loads(task["tests"])[:3]
     title = escape_tg_text(task["title"])
     description = escape_tg_text(task["description"])
 
     parts = [
         f"<b>{title}</b>\n\n",
         f"{description}\n\n",
-        "<b>Примеры</b>",
+        "<b>Примеры тестов</b>",
     ]
     for i, test in enumerate(tests, 1):
         parts.append(
-            f"\n\n<b>Пример {i}</b>\n"
+            f"\n\n<b>Тест {i}</b>\n"
             f"Ввод:\n<code>{pretty_io(test['input'])}</code>\n"
             f"Вывод:\n<code>{pretty_io(test['expected'])}</code>"
         )
-    if hidden > 0:
-        word = plural(hidden, "скрытый тест", "скрытых теста", "скрытых тестов")
-        parts.append(f"\n\nЕщё {hidden} {word} — подгонять ответ под примеры не выйдет.")
     parts.append(
         "\n\nПиши <code>input()</code> без текста внутри — "
         "подсказка попадёт в вывод и тесты не пройдут.\n"
@@ -295,12 +276,12 @@ def remember_task(context: ContextTypes.DEFAULT_TYPE, task: dict, topic_id=None)
 
 async def send_task(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: dict, task: dict, query=None):
     """Показывает условие и переводит в режим решения. С query — правит сообщение, иначе шлёт новое."""
-    topic_id = None if task.get("set_id") or task.get("starter_pos") else context.user_data.get("topic_id")
+    topic_id = None if task.get("set_id") else context.user_data.get("topic_id")
     remember_task(context, task, topic_id)
     markup = task_markup(task, topic_id)
     text = format_task_text(task)
     image_path = task_image_path(task)
-    await track(user["id"], "task_open", {"task_id": task["id"], "starter_pos": task.get("starter_pos")})
+    await track(user["id"], "task_open", {"task_id": task["id"], "cat_key": task.get("cat_key")})
 
     # картинку нельзя воткнуть в edit_text — шлём фото, потом условие
     if image_path is not None:
@@ -522,7 +503,7 @@ async def _check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
     await track(
         user["id"],
         "solved" if ok else "submit_fail",
-        {"task_id": task_id, "starter_pos": task.get("starter_pos")},
+        {"task_id": task_id, "cat_key": task.get("cat_key")},
     )
     attempt_count = await get_attempt_count(user["id"], task_id)
     recent_attempts = await get_recent_attempts(user["id"], task_id)

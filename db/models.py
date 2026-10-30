@@ -93,8 +93,6 @@ class Task(Base):
     set_id = Column(Integer, ForeignKey("personal_sets.id", ondelete="CASCADE"), nullable=True, index=True)
     # порядок внутри личного блока
     pos = Column(Integer, nullable=True)
-    # место в стартовом наборе для новичков из рилсов (db/starter.json), у остальных пусто
-    starter_pos = Column(Integer, nullable=True, index=True)
 
 
 class CatalogMeta(Base):
