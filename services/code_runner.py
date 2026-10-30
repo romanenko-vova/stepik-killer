@@ -67,7 +67,7 @@ for i, test in enumerate(tests, 1):
             )
         except subprocess.TimeoutExpired:
             results.append({"n": i, "ok": False, "timeout": True})
-            continue
+            break
 
     actual = open(out_path, encoding="utf-8", errors="replace").read()
     stderr = open(err_path, encoding="utf-8", errors="replace").read()
@@ -78,7 +78,7 @@ for i, test in enumerate(tests, 1):
         elif "MemoryError" in stderr:
             stderr = "MemoryError: программа съела всю память."
         results.append({"n": i, "ok": False, "error": stderr[-500:]})
-        continue
+        break
 
     actual = actual.strip()
     expected = test["expected"].strip()
@@ -94,6 +94,8 @@ for i, test in enumerate(tests, 1):
                 "actual": actual[:2000],
             }
         )
+        # дальше не гоняем: ученику нужен первый упавший тест, остальное — шум
+        break
 
 print(json.dumps(results, ensure_ascii=False))
 """
@@ -196,9 +198,7 @@ async def _run_tests_in_docker(code: str, tests: list) -> tuple[bool, list]:
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
-            return False, [
-                {"n": i, "ok": False, "timeout": True} for i in range(1, len(tests) + 1)
-            ]
+            return False, [{"n": 1, "ok": False, "timeout": True}]
 
     if proc.returncode != 0:
         err = stderr.decode(errors="replace")[-500:]

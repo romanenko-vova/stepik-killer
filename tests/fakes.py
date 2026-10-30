@@ -32,6 +32,12 @@ class FakeBot:
     async def edit_message_text(self, chat_id, message_id, text, **kwargs):
         self.sent.append({"edit": True, "chat_id": chat_id, "text": text, **kwargs})
 
+    async def edit_message_reply_markup(self, chat_id, message_id, reply_markup=None):
+        self.sent.append({"edit_markup": True, "chat_id": chat_id, "text": "", "reply_markup": reply_markup})
+
+    async def send_chat_action(self, chat_id, action):
+        return True
+
     async def send_photo(self, chat_id, photo, caption=None, **kwargs):
         self.sent.append({"chat_id": chat_id, "photo": True, "text": caption})
 

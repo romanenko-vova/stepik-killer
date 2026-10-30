@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
+from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
@@ -61,7 +62,7 @@ def format_tests_plain(results: list[dict]) -> str:
         if item.get("ok"):
             parts.append(f"Тест {item['n']}: ✅")
         elif item.get("timeout"):
-            parts.append(f"Тест {item['n']}: ❌ слишком долго (больше 10 секунд)")
+            parts.append(f"Тест {item['n']}: ❌ слишком долго (больше 5 секунд)")
         elif item.get("error"):
             parts.append(f"Тест {item['n']}: ❌ ошибка\n{item['error']}")
         else:
@@ -77,13 +78,18 @@ def format_tests_plain(results: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+# столько тестов показано в условии задачи; прошедшие скрытые тесты в отчёте не светим
+SHOWN_IN_TASK = 3
+
+
 def format_tests_html(results: list[dict]) -> str:
     parts = []
     for item in results:
         if item.get("ok"):
-            parts.append(f"<b>Тест {item['n']}:</b> ✅")
+            if item["n"] <= SHOWN_IN_TASK:
+                parts.append(f"<b>Тест {item['n']}:</b> ✅")
         elif item.get("timeout"):
-            parts.append(f"<b>Тест {item['n']}:</b> ❌ слишком долго (больше 10 секунд)")
+            parts.append(f"<b>Тест {item['n']}:</b> ❌ слишком долго (больше 5 секунд)")
         elif item.get("error"):
             parts.append(
                 f"<b>Тест {item['n']}:</b> ❌ ошибка\n"
@@ -96,11 +102,11 @@ def format_tests_html(results: list[dict]) -> str:
                 f"Ожидалось:\n<code>{pretty_io(item['expected'])}</code>\n"
                 f"Получено:\n<code>{pretty_io(item['actual'])}</code>"
             )
-    return "\n\n".join(parts)
+    return "\n".join(p if "\n" not in p else "\n" + p for p in parts).strip()
 
 
 def format_task_text(task: dict) -> str:
-    tests = json.loads(task["tests"])[:3]
+    tests = json.loads(task["tests"])[:SHOWN_IN_TASK]
     title = escape_tg_text(task["title"])
     description = escape_tg_text(task["description"])
 
@@ -385,29 +391,32 @@ def result_markup(ok: bool, topic_id, set_id=None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-def check_text(attempt_count: int, results: list, ok: bool, feedback: str = "") -> str:
-    # разнос сверху: на скриншоте первым должен быть панч, а не таблица тестов
+def check_text(attempt_count: int, results: list, ok: bool) -> str:
     verdict = "✅ Принято" if ok else "❌ Не принято"
-    tests = f"<b>{verdict} · попытка №{attempt_count}</b>\n\n{format_tests_html(results)}"
-    tail = ""
-    if not ok:
-        tail = "\n\nПрисылай исправленный код или жми «Дай подсказку»."
-    if feedback:
-        text = feedback + "\n\n" + tests + tail
-    else:
-        text = tests + tail
-    return prepare_tg_html(text, 4096)
+    return prepare_tg_html(f"<b>{verdict} · попытка №{attempt_count}</b>\n\n{format_tests_html(results)}", 4096)
+
+
+async def keep_typing(bot, chat_id: int, stop: asyncio.Event):
+    # пока нейронка думает (10–20 с), в чате висит «печатает…» — видно, что разнос едет
+    while not stop.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except TelegramError:
+            pass
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=4)
+        except asyncio.TimeoutError:
+            pass
 
 
 async def attach_review(
     bot,
     chat_id: int,
-    message_id: int,
+    tests_message_id: int,
     ok: bool,
     topic_id,
     set_id,
     attempt_count: int,
-    results: list,
     user_code: str,
     condition: str,
     report: str,
@@ -415,7 +424,9 @@ async def attach_review(
     recent_attempts: list,
     solution_id: int | None = None,
 ):
-    # ревью летит само, хендлер уже ответил тестами
+    """Разнос отдельным сообщением: приходит с уведомлением и не теряется над простынёй тестов."""
+    stop = asyncio.Event()
+    typing = asyncio.create_task(keep_typing(bot, chat_id, stop))
     try:
         feedback = await review_solution(
             user_code,
@@ -426,18 +437,30 @@ async def attach_review(
             recent_attempts,
             ok,
         )
+        stop.set()
+        if not feedback.strip():
+            return
         if solution_id:
             await set_solution_review(solution_id, feedback)
-        text = check_text(attempt_count, results, ok, feedback)
-        await bot.edit_message_text(
+        if ok:
+            await bot.send_message(chat_id=chat_id, text=feedback, parse_mode="HTML")
+            return
+        # кнопки переезжают под разнос: под тестами их больше не нужно
+        await bot.send_message(
             chat_id=chat_id,
-            message_id=message_id,
-            text=text,
+            text=prepare_tg_html(feedback, 4096),
             parse_mode="HTML",
-            reply_markup=None if ok else result_markup(ok, topic_id, set_id),
+            reply_markup=result_markup(ok, topic_id, set_id),
         )
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=tests_message_id, reply_markup=None)
+        except TelegramError:
+            pass
     except Exception:
-        logging.getLogger(__name__).exception("ревью не дописалось")
+        logging.getLogger(__name__).exception("ревью не пришло")
+    finally:
+        stop.set()
+        await typing
 
 
 async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -515,7 +538,7 @@ async def _check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
     markup = result_markup(ok, topic_id, set_id)
     text = check_text(attempt_count, results, ok)
 
-    # тесты сразу, gpt потом допишет в это же сообщение
+    # тесты сразу, разнос придёт отдельным сообщением
     if ok:
         solved_now = await count_solved(user["id"])
         await wait.edit_text(text, parse_mode="HTML")
@@ -540,7 +563,6 @@ async def _check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
             topic_id,
             set_id,
             attempt_count,
-            results,
             user_code,
             task["description"],
             report,

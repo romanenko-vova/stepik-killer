@@ -87,3 +87,12 @@ async def test_solution_folder_is_read_only():
     ok, results = await run_tests(code, SUM_TESTS[:1])
     assert not ok
     assert "Error" in results[0]["error"]
+
+
+async def test_stops_at_first_failed_test():
+    tests = [{"input": str(i), "expected": str(i)} for i in range(1, 7)]
+    # падает на четвёртом, дальше не гоняем
+    ok, results = await run_tests("x = int(input())\nprint(x if x != 4 else 0)", tests)
+    assert not ok
+    assert [r["n"] for r in results] == [1, 2, 3, 4]
+    assert results[-1]["actual"] == "0"
