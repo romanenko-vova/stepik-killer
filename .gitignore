@@ -7,3 +7,10 @@ ABOUT/
 test.py
 conversation_state.pkl
 .DS_Store
+.pytest_cache/
+.ruff_cache/
+# локальная SQLite и копии с прода — только на диске
+_archive/
+prod_copy/
+*.orphans.json
+MIGRATION_REPORT.md
