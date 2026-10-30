@@ -45,13 +45,18 @@ def content_sig(title: str, description: str, tests_json: str, image: str | None
 
 
 def flatten_catalog(catalog: list) -> list[tuple]:
-    # ключ по месту в курсе: модуль-тема-задача. порядок не меняем — id живёт
+    """(ключ, модуль, тема, задача, место в теме).
+
+    Ключ связывает задачу в каталоге с id в базе, а через id — с решениями.
+    У задач он записан явно ("key"), поэтому их можно переставлять внутри темы.
+    Без "key" — старое правило по месту: модуль-тема-задача.
+    """
     items = []
     for mi, module in enumerate(catalog, 1):
         for ti, topic in enumerate(module["topics"], 1):
             for qi, task in enumerate(topic["tasks"], 1):
-                key = f"{mi:02d}-{ti:02d}-{qi:02d}"
-                items.append((key, module, topic, task))
+                key = task.get("key") or f"{mi:02d}-{ti:02d}-{qi:02d}"
+                items.append((key, module, topic, task, qi))
     return items
 
 
@@ -117,15 +122,17 @@ async def seed_if_empty():
         ).scalars().all()
         by_key = {row.cat_key: row for row in rows if row.cat_key}
 
-        for key, _module, topic, task in items:
-            await _upsert_task(session, by_key.get(key), key, topic["title"], task)
+        for key, _module, topic, task, pos in items:
+            await _upsert_task(session, by_key.get(key), key, topic["title"], task, pos=pos)
 
         await session.commit()
 
     await save_sig(sig)
 
 
-async def _upsert_task(session, existing, key: str, topic_title: str, task: dict, starter_pos=None):
+async def _upsert_task(
+    session, existing, key: str, topic_title: str, task: dict, starter_pos=None, pos=None
+):
     tests_json = json.dumps(task["tests"], ensure_ascii=False)
     image = task.get("image")
     new_sig = content_sig(task["title"], task["description"], tests_json, image)
@@ -142,6 +149,7 @@ async def _upsert_task(session, existing, key: str, topic_title: str, task: dict
                 cat_key=key,
                 content_sig=new_sig,
                 starter_pos=starter_pos,
+                pos=pos,
             )
         )
         return
@@ -163,6 +171,7 @@ async def _upsert_task(session, existing, key: str, topic_title: str, task: dict
     existing.image = image
     existing.content_sig = new_sig
     existing.starter_pos = starter_pos
+    existing.pos = pos
 
 
 async def seed_starter():

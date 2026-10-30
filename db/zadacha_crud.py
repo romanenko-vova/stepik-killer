@@ -39,7 +39,9 @@ async def get_tasks_by_topic(topic_title: str):
     async with get_session() as session:
         rows = (
             await session.execute(
-                select(Task).where(Task.topic == topic_title, Task.set_id.is_(None)).order_by(Task.id)
+                select(Task)
+                .where(Task.topic == topic_title, Task.set_id.is_(None))
+                .order_by(func.coalesce(Task.pos, Task.id), Task.id)
             )
         ).scalars().all()
         return [as_dict(row) for row in rows]
@@ -209,7 +211,8 @@ async def next_task_for(user_id: int) -> dict | None:
             await session.execute(
                 select(Task)
                 .where(Task.set_id.is_(None), Task.starter_pos.is_(None))
-                .order_by(Task.cat_key.nulls_last(), Task.id)
+                # модуль-тема из ключа, дальше место в теме: разминка идёт первой
+                .order_by(func.substr(Task.cat_key, 1, 5), func.coalesce(Task.pos, Task.id), Task.id)
             )
         ).scalars().all()
         for task in course:

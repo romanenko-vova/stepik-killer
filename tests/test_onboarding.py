@@ -96,3 +96,9 @@ async def test_next_task_walks_starter_then_course():
     after = await next_task_for(user["id"])
     assert after["starter_pos"] is None
     assert after["cat_key"] == "01-01-01"
+    await add_solution(user["id"], after["id"], "ok", "ok", [])
+    # в первой теме осталось 5 задач, во второй первой идёт разминка, хотя её ключ 01-02-05
+    for _ in range(5):
+        task = await next_task_for(user["id"])
+        await add_solution(user["id"], task["id"], "ok", "ok", [])
+    assert (await next_task_for(user["id"]))["title"] == "Разгон. Последняя цифра"
