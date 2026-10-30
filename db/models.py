@@ -74,7 +74,7 @@ class PersonalSetAccess(Base):
 class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = (
-        CheckConstraint("difficulty BETWEEN 1 AND 3", name="ck_tasks_difficulty"),
+        CheckConstraint("difficulty BETWEEN 1 AND 5", name="ck_tasks_difficulty"),
         Index("ix_tasks_topic_set", "topic", "set_id"),
     )
 

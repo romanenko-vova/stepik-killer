@@ -30,7 +30,7 @@ async def test_seed_is_idempotent():
     await seed_if_empty()
     modules = await get_modules()
     assert len(modules) == 4
-    tasks = await get_tasks_by_topic("Базовые условия и переменные")
+    tasks = await get_tasks_by_topic("Первые заказы")
     assert len(tasks) == 6
 
 
@@ -44,12 +44,12 @@ async def test_create_user_twice_does_not_fail():
 async def test_solved_and_stale_follow_task_version():
     await seed_if_empty()
     user = await create_user(1)
-    task = (await get_tasks_by_topic("Базовые условия и переменные"))[0]
+    task = (await get_tasks_by_topic("Первые заказы"))[0]
     sid = await add_solution(user["id"], task["id"], "print(1)", "ok", [{"n": 1, "ok": True}])
     await set_solution_review(sid, "<b>норм</b>")
 
     solved, total, stale = await get_progress(user["id"])
-    assert (solved, total, stale) == (1, 61, 0)
+    assert (solved, total, stale) == (1, 58, 0)
 
     # меняем подпись задачи — решение становится устаревшим
     from db.database import get_session
@@ -89,7 +89,7 @@ async def test_personal_set_visible_only_to_owner():
 async def test_admin_lists_students_with_counts():
     await seed_if_empty()
     user = await create_user(20, None, "Петя")
-    task = (await get_tasks_by_topic("Базовые условия и переменные"))[0]
+    task = (await get_tasks_by_topic("Первые заказы"))[0]
     await add_solution(user["id"], task["id"], "x", "fail", [])
     await add_solution(user["id"], task["id"], "y", "ok", [])
     students = await list_students()
