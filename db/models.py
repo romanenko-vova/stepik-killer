@@ -9,6 +9,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql import func
 
 from db.models_base import Base
@@ -24,6 +25,8 @@ class User(Base):
     first_name = Column(String, nullable=True)
     # 0 — тон ещё не выбран (старые пользователи), 1–3 — уровень разноса
     toxic_level = Column(Integer, nullable=False, server_default="0")
+    # откуда пришёл: параметр deep-link /start <source>, только первый
+    source = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
@@ -85,6 +88,8 @@ class Task(Base):
     set_id = Column(Integer, ForeignKey("personal_sets.id", ondelete="CASCADE"), nullable=True, index=True)
     # порядок внутри личного блока
     pos = Column(Integer, nullable=True)
+    # место в стартовом наборе для новичков из рилсов (db/starter.json), у остальных пусто
+    starter_pos = Column(Integer, nullable=True, index=True)
 
 
 class CatalogMeta(Base):
@@ -108,4 +113,17 @@ class Solution(Base):
     content_sig = Column(String, nullable=True)
     tests_json = Column(Text, nullable=True)
     review = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Event(Base):
+    """События воронки: start, task_open, submit, solved, hint, offer_shown, trial_click..."""
+
+    __tablename__ = "events"
+    __table_args__ = (Index("ix_events_kind_created", "kind", "created_at"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    kind = Column(String(40), nullable=False)
+    payload = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

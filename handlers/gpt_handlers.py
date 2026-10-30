@@ -26,9 +26,11 @@ from db.zadacha_crud import (
     get_stale_task_ids,
     get_task,
     get_tasks_by_topic,
+    next_task_for,
     set_solution_review,
 )
 from services.code_runner import run_tests
+from services.events import track
 from services.tg_html import escape_tg_text, fit_tg_html, prepare_tg_html
 from services.verify_python_code import give_hint, review_solution
 
@@ -91,22 +93,41 @@ def format_tests_html(results: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
+VISIBLE_TESTS = 2
+
+
+def plural(n: int, one: str, few: str, many: str) -> str:
+    if n % 100 in (11, 12, 13, 14):
+        return many
+    if n % 10 == 1:
+        return one
+    if n % 10 in (2, 3, 4):
+        return few
+    return many
+
+
 def format_task_text(task: dict) -> str:
-    tests = json.loads(task["tests"])[:3]
+    all_tests = json.loads(task["tests"])
+    # показываем два примера: если видны все тесты, их проходят хардкодом по вводу
+    tests = all_tests[:VISIBLE_TESTS]
+    hidden = len(all_tests) - len(tests)
     title = escape_tg_text(task["title"])
     description = escape_tg_text(task["description"])
 
     parts = [
         f"<b>{title}</b>\n\n",
         f"{description}\n\n",
-        "<b>Примеры тестов</b>",
+        "<b>Примеры</b>",
     ]
     for i, test in enumerate(tests, 1):
         parts.append(
-            f"\n\n<b>Тест {i}</b>\n"
+            f"\n\n<b>Пример {i}</b>\n"
             f"Ввод:\n<code>{pretty_io(test['input'])}</code>\n"
             f"Вывод:\n<code>{pretty_io(test['expected'])}</code>"
         )
+    if hidden > 0:
+        word = plural(hidden, "скрытый тест", "скрытых теста", "скрытых тестов")
+        parts.append(f"\n\nЕщё {hidden} {word} — подгонять ответ под примеры не выйдет.")
     parts.append(
         "\n\nПиши <code>input()</code> без текста внутри — "
         "подсказка попадёт в вывод и тесты не пройдут.\n"
@@ -236,6 +257,67 @@ async def open_topic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MODULS
 
 
+def task_markup(task: dict, topic_id=None) -> InlineKeyboardMarkup:
+    keyboard = []
+    set_id = task.get("set_id")
+    if set_id:
+        keyboard.append(
+            [InlineKeyboardButton("К моим задачам", callback_data=f"pset_{set_id}", style="primary")]
+        )
+    elif topic_id:
+        keyboard.append(
+            [InlineKeyboardButton("Назад к задачам", callback_data=f"topic_{topic_id}", style="primary")]
+        )
+    keyboard.append([InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+def remember_task(context: ContextTypes.DEFAULT_TYPE, task: dict, topic_id=None):
+    context.user_data["task_id"] = task["id"]
+    context.user_data.pop("last_code", None)
+    context.user_data.pop("last_report", None)
+    if task.get("set_id"):
+        context.user_data["personal_set_id"] = task["set_id"]
+        context.user_data.pop("topic_id", None)
+    else:
+        context.user_data.pop("personal_set_id", None)
+        if topic_id:
+            context.user_data["topic_id"] = topic_id
+        else:
+            context.user_data.pop("topic_id", None)
+
+
+async def send_task(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user: dict, task: dict, query=None):
+    """Показывает условие и переводит в режим решения. С query — правит сообщение, иначе шлёт новое."""
+    topic_id = None if task.get("set_id") or task.get("starter_pos") else context.user_data.get("topic_id")
+    remember_task(context, task, topic_id)
+    markup = task_markup(task, topic_id)
+    text = format_task_text(task)
+    image_path = task_image_path(task)
+    await track(user["id"], "task_open", {"task_id": task["id"], "starter_pos": task.get("starter_pos")})
+
+    # картинку нельзя воткнуть в edit_text — шлём фото, потом условие
+    if image_path is not None:
+        if query is not None:
+            try:
+                await query.message.delete()
+            except TelegramError:
+                pass
+        await context.bot.send_photo(
+            chat_id=chat_id,
+            photo=InputFile(image_path.read_bytes(), filename=image_path.name),
+            caption=task["title"],
+        )
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode="HTML")
+        return SOLVING
+
+    if query is not None:
+        await query.edit_message_text(text=text, reply_markup=markup, parse_mode="HTML")
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup, parse_mode="HTML")
+    return SOLVING
+
+
 async def open_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -247,71 +329,21 @@ async def open_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("task_id", None)
         await query.edit_message_text("Этой задачи нет или она не твоя.")
         return MAIN_MENU
+    return await send_task(context, query.message.chat_id, user, task, query=query)
 
-    context.user_data["task_id"] = task_id
-    set_id = task.get("set_id")
-    topic_id = context.user_data.get("topic_id")
-    if set_id:
-        context.user_data["personal_set_id"] = set_id
-        context.user_data.pop("topic_id", None)
-        topic_id = None
-    else:
-        context.user_data.pop("personal_set_id", None)
 
-    keyboard = []
-    if set_id:
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    "К моим задачам",
-                    callback_data=f"pset_{set_id}",
-                    style="primary",
-                )
-            ]
-        )
-    elif topic_id:
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    "Назад к задачам",
-                    callback_data=f"topic_{topic_id}",
-                    style="primary",
-                )
-            ]
-        )
-    keyboard.append(
-        [InlineKeyboardButton("В меню", callback_data="main_menu", style="primary")]
-    )
-    markup = InlineKeyboardMarkup(keyboard)
-    text = format_task_text(task)
-    image_path = task_image_path(task)
-
-    # картинку нельзя воткнуть в edit_text — шлём фото, потом условие
-    if image_path is not None:
-        chat_id = query.message.chat_id
-        try:
-            await query.message.delete()
-        except TelegramError:
-            pass
-        await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=InputFile(image_path.read_bytes(), filename=image_path.name),
-            caption=task["title"],
-        )
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=markup,
-            parse_mode="HTML",
-        )
-        return SOLVING
-
-    await query.edit_message_text(
-        text=text,
-        reply_markup=markup,
-        parse_mode="HTML",
-    )
-    return SOLVING
+async def open_next_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = await get_user(update.effective_user.id)
+    if not user:
+        return MAIN_MENU
+    task = await next_task_for(user["id"])
+    if task is None:
+        await query.message.reply_text("Ты решил вообще всё. Даже мне нечего добавить.")
+        return MAIN_MENU
+    # новым сообщением: старое с разносом пусть остаётся — его скриншотят
+    return await send_task(context, query.message.chat_id, user, task)
 
 
 def task_image_path(task: dict) -> Path | None:
@@ -326,6 +358,10 @@ def task_image_path(task: dict) -> Path | None:
 
 def result_markup(ok: bool, topic_id, set_id=None) -> InlineKeyboardMarkup:
     keyboard = []
+    if ok:
+        keyboard.append(
+            [InlineKeyboardButton("➡️ Следующая задача", callback_data="next_task", style="success")]
+        )
     if not ok:
         keyboard.append(
             [
@@ -342,7 +378,7 @@ def result_markup(ok: bool, topic_id, set_id=None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "К моим задачам",
                     callback_data=f"pset_{set_id}",
-                    style="success" if ok else "primary",
+                    style="primary",
                 )
             ]
         )
@@ -352,7 +388,7 @@ def result_markup(ok: bool, topic_id, set_id=None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     "К задачам",
                     callback_data=f"topic_{topic_id}",
-                    style="success" if ok else "primary",
+                    style="primary",
                 )
             ]
         )
@@ -363,17 +399,16 @@ def result_markup(ok: bool, topic_id, set_id=None) -> InlineKeyboardMarkup:
 
 
 def check_text(attempt_count: int, results: list, ok: bool, feedback: str = "") -> str:
-    head = (
-        f"<b>Попытка №{attempt_count}</b>\n\n"
-        f"<b>Тесты</b>\n{format_tests_html(results)}"
-    )
+    # разнос сверху: на скриншоте первым должен быть панч, а не таблица тестов
+    verdict = "✅ Принято" if ok else "❌ Не принято"
+    tests = f"<b>{verdict} · попытка №{attempt_count}</b>\n\n{format_tests_html(results)}"
     tail = ""
     if not ok:
-        tail = "\n\nМожешь прислать исправленный код сам или нажать «Дай подсказку»."
+        tail = "\n\nПрисылай исправленный код или жми «Дай подсказку»."
     if feedback:
-        text = head + "\n\n" + feedback + tail
+        text = feedback + "\n\n" + tests + tail
     else:
-        text = head + tail
+        text = tests + tail
     return prepare_tg_html(text, 4096)
 
 
@@ -448,6 +483,11 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
     solution_id = await add_solution(
         user["id"], task_id, user_code, "ok" if ok else "fail", results
     )
+    await track(
+        user["id"],
+        "solved" if ok else "submit_fail",
+        {"task_id": task_id, "starter_pos": task.get("starter_pos")},
+    )
     attempt_count = await get_attempt_count(user["id"], task_id)
     recent_attempts = await get_recent_attempts(user["id"], task_id)
     context.user_data["last_code"] = user_code
@@ -507,6 +547,7 @@ async def send_hint(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Эта задача не твоя или её уже нет.")
         return SOLVING
 
+    await track(user["id"], "hint", {"task_id": task_id})
     wait = await query.message.reply_text("Думаю над подсказкой...")
     attempt_count = await get_attempt_count(user["id"], task_id)
     recent_attempts = await get_recent_attempts(user["id"], task_id)

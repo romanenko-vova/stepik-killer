@@ -35,8 +35,9 @@ def as_dict(obj) -> dict | None:
 
 async def on_startup():
     # схему создаёт alembic (`alembic upgrade head`), тут только наполнение
-    from db.seed import seed_if_empty
+    from db.seed import seed_if_empty, seed_starter
     from db.weekend_sets import ensure_weekend_sets
 
     await seed_if_empty()
+    await seed_starter()
     await ensure_weekend_sets()

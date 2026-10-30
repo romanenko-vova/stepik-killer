@@ -165,3 +165,43 @@ async def attempts_today(user_id: int) -> int:
                 )
             )
         ).scalar_one()
+
+
+async def starter_progress(user_id: int) -> tuple[int, int]:
+    async with get_session() as session:
+        total = (
+            await session.execute(
+                select(func.count()).select_from(Task).where(Task.starter_pos.is_not(None))
+            )
+        ).scalar_one()
+    solved_ids = await get_solved_task_ids(user_id)
+    async with get_session() as session:
+        starter_ids = set(
+            (await session.execute(select(Task.id).where(Task.starter_pos.is_not(None)))).scalars().all()
+        )
+    return len(solved_ids & starter_ids), total
+
+
+async def next_task_for(user_id: int) -> dict | None:
+    """Следующая нерешённая: сначала стартовый набор по порядку, потом курс по месту в каталоге."""
+    solved = await get_solved_task_ids(user_id)
+    async with get_session() as session:
+        starter = (
+            await session.execute(
+                select(Task).where(Task.starter_pos.is_not(None)).order_by(Task.starter_pos)
+            )
+        ).scalars().all()
+        for task in starter:
+            if task.id not in solved:
+                return as_dict(task)
+        course = (
+            await session.execute(
+                select(Task)
+                .where(Task.set_id.is_(None), Task.starter_pos.is_(None))
+                .order_by(Task.cat_key.nulls_last(), Task.id)
+            )
+        ).scalars().all()
+        for task in course:
+            if task.id not in solved:
+                return as_dict(task)
+    return None

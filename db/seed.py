@@ -18,6 +18,8 @@ from db.database import get_session
 from db.models import CatalogMeta, Module, Solution, Task, Topic
 
 CATALOG_PATH = Path(__file__).with_name("catalog.json")
+STARTER_PATH = Path(__file__).with_name("starter.json")
+STARTER_TOPIC = "Старт"
 
 
 def load_catalog():
@@ -108,50 +110,83 @@ async def seed_if_empty():
             for topic in module["topics"]:
                 await _upsert_topic(session, topic["title"], module_id)
 
-        rows = (await session.execute(select(Task).where(Task.set_id.is_(None)))).scalars().all()
+        rows = (
+            await session.execute(
+                select(Task).where(Task.set_id.is_(None), Task.starter_pos.is_(None))
+            )
+        ).scalars().all()
         by_key = {row.cat_key: row for row in rows if row.cat_key}
 
         for key, _module, topic, task in items:
-            tests_json = json.dumps(task["tests"], ensure_ascii=False)
-            image = task.get("image")
-            new_sig = content_sig(task["title"], task["description"], tests_json, image)
-            existing = by_key.get(key)
-
-            if existing:
-                old_sig = existing.content_sig or content_sig(
-                    existing.title, existing.description, existing.tests, existing.image
-                )
-                # старым попыткам ставим подпись той версии, на которой их сдавали
-                await session.execute(
-                    update(Solution)
-                    .where(Solution.task_id == existing.id, Solution.content_sig.is_(None))
-                    .values(content_sig=old_sig)
-                )
-                existing.title = task["title"]
-                existing.topic = topic["title"]
-                existing.difficulty = task["difficulty"]
-                existing.description = task["description"]
-                existing.tests = tests_json
-                existing.image = image
-                existing.content_sig = new_sig
-            else:
-                session.add(
-                    Task(
-                        title=task["title"],
-                        topic=topic["title"],
-                        difficulty=task["difficulty"],
-                        description=task["description"],
-                        tests=tests_json,
-                        image=image,
-                        cat_key=key,
-                        content_sig=new_sig,
-                    )
-                )
+            await _upsert_task(session, by_key.get(key), key, topic["title"], task)
 
         await session.commit()
 
     await save_sig(sig)
 
 
+async def _upsert_task(session, existing, key: str, topic_title: str, task: dict, starter_pos=None):
+    tests_json = json.dumps(task["tests"], ensure_ascii=False)
+    image = task.get("image")
+    new_sig = content_sig(task["title"], task["description"], tests_json, image)
+
+    if existing is None:
+        session.add(
+            Task(
+                title=task["title"],
+                topic=topic_title,
+                difficulty=task["difficulty"],
+                description=task["description"],
+                tests=tests_json,
+                image=image,
+                cat_key=key,
+                content_sig=new_sig,
+                starter_pos=starter_pos,
+            )
+        )
+        return
+
+    old_sig = existing.content_sig or content_sig(
+        existing.title, existing.description, existing.tests, existing.image
+    )
+    # старым попыткам ставим подпись той версии, на которой их сдавали
+    await session.execute(
+        update(Solution)
+        .where(Solution.task_id == existing.id, Solution.content_sig.is_(None))
+        .values(content_sig=old_sig)
+    )
+    existing.title = task["title"]
+    existing.topic = topic_title
+    existing.difficulty = task["difficulty"]
+    existing.description = task["description"]
+    existing.tests = tests_json
+    existing.image = image
+    existing.content_sig = new_sig
+    existing.starter_pos = starter_pos
+
+
+async def seed_starter():
+    """Стартовый набор для новичков: 10 задач по нарастающей, ключи start-01..start-10.
+
+    В меню модулей его нет — новичок идёт по нему кнопкой «Следующая задача».
+    Файл маленький, обновляем на каждом старте.
+    """
+    tasks = json.loads(STARTER_PATH.read_text(encoding="utf-8"))
+    async with get_session() as session:
+        rows = (
+            await session.execute(select(Task).where(Task.cat_key.like("start-%")))
+        ).scalars().all()
+        by_key = {row.cat_key: row for row in rows}
+        for pos, task in enumerate(tasks, 1):
+            key = f"start-{pos:02d}"
+            await _upsert_task(session, by_key.get(key), key, STARTER_TOPIC, task, starter_pos=pos)
+        await session.commit()
+
+
+async def _main():
+    await seed_if_empty()
+    await seed_starter()
+
+
 if __name__ == "__main__":
-    asyncio.run(seed_if_empty())
+    asyncio.run(_main())

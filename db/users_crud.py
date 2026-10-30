@@ -32,12 +32,19 @@ async def create_user(
     username: str | None = None,
     first_name: str | None = None,
     toxic_level: int = 0,
+    source: str | None = None,
 ):
     # два быстрых /start подряд не должны падать на уникальности
     async with get_session() as session:
         await session.execute(
             insert(User)
-            .values(id_tg=user_id, username=username, first_name=first_name, toxic_level=toxic_level)
+            .values(
+                id_tg=user_id,
+                username=username,
+                first_name=first_name,
+                toxic_level=toxic_level,
+                source=source,
+            )
             .on_conflict_do_nothing(index_elements=[User.id_tg])
         )
         await session.commit()

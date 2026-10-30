@@ -18,6 +18,7 @@ from db.database import on_startup as db_startup
 from handlers.gpt_handlers import (
     check_solution,
     open_modul,
+    open_next_task,
     open_personal,
     open_personal_set,
     open_task,
@@ -26,7 +27,7 @@ from handlers.gpt_handlers import (
     start_modul,
 )
 from handlers.main_menu_handlerds import main_menu
-from handlers.start_handler import choose_toxic, open_settings, start_handler
+from handlers.start_handler import choose_toxic, open_settings, settings_command, start_handler
 
 
 async def on_startup(app):
@@ -62,6 +63,7 @@ def main():
                 ),
             ],
             MAIN_MENU: [
+                CallbackQueryHandler(open_next_task, pattern="^next_task$"),
                 CallbackQueryHandler(start_modul, pattern="modul_db"),
                 CallbackQueryHandler(open_personal, pattern="^personal$"),
                 CallbackQueryHandler(open_settings, pattern="^settings$"),
@@ -74,6 +76,7 @@ def main():
                 CallbackQueryHandler(main_menu, pattern="main_menu"),
             ],
             MODULS: [
+                CallbackQueryHandler(open_next_task, pattern="^next_task$"),
                 CallbackQueryHandler(open_modul, pattern="^modul_[0-9]+$"),
                 CallbackQueryHandler(open_topic, pattern="^topic_[0-9]+$"),
                 CallbackQueryHandler(open_task, pattern="^task_[0-9]+$"),
@@ -87,6 +90,7 @@ def main():
                     filters.TEXT & ~filters.COMMAND, check_solution
                 ),
                 CallbackQueryHandler(send_hint, pattern="^hint$"),
+                CallbackQueryHandler(open_next_task, pattern="^next_task$"),
                 CallbackQueryHandler(open_modul, pattern="^modul_[0-9]+$"),
                 CallbackQueryHandler(open_topic, pattern="^topic_[0-9]+$"),
                 CallbackQueryHandler(open_task, pattern="^task_[0-9]+$"),
@@ -96,7 +100,10 @@ def main():
                 CallbackQueryHandler(main_menu, pattern="main_menu"),
             ],
         },
-        fallbacks=[CommandHandler("start", start_handler)],
+        fallbacks=[
+            CommandHandler("start", start_handler),
+            CommandHandler("settings", settings_command),
+        ],
         persistent=True,
         name="conversation_handler",
     )
