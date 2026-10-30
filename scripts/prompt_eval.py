@@ -165,6 +165,9 @@ MODEL_NAMES = {
     "x-ai/grok-4.3": "Grok 4.3",
     "anthropic/claude-sonnet-5.5": "Claude Sonnet 5.5",
     "deepseek/deepseek-v4.1-flash": "DeepSeek V4.1 Flash",
+    "deepseek/deepseek-v4-pro": "DeepSeek V4 Pro",
+    "deepseek/deepseek-v4-flash": "DeepSeek V4 Flash",
+    "deepseek/deepseek-v3.2": "DeepSeek V3.2",
 }
 
 
@@ -249,16 +252,16 @@ async def main():
             print(f"{model_name(model)} [{i + 1}] {case['title']} {took:.1f}s", flush=True)
 
     lines = [
-        "# Разносы бота: 20 попыток, три модели",
+        f"# Разносы бота: 20 попыток, моделей — {len(models)}",
         "",
-        "Режим «Без пощады», промпт v2: сеньор в пятницу вечером, панч до 8 слов. "
+        "Режим «Без пощады», промпт v3: сеньор в пятницу вечером, первая строка — всегда шутка до 8 слов. "
         + (
             f"Все {real_count} попыток реальные: последние уникальные решения учеников из копии прод-базы, имён нет."
             if real_count == len(cases)
             else f"Реальных попыток {real_count}, остальные — типовые ошибки на задачах каталога."
         ),
         "",
-        "Первая строка ответа — то, что попадёт на скриншот. Прошлая версия — в `PROMPT_EVAL_v1.md`.",
+        "Первая строка ответа — то, что попадёт на скриншот. Прошлые версии — `PROMPT_EVAL_v1.md` и `PROMPT_EVAL_v2.md`.",
         "",
         "| Модель | Ответ, с | Цена ответа | Слов в панче, в среднем | Панч ≤ 8 слов |",
         "|---|---|---|---|---|",

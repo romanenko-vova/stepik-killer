@@ -12,8 +12,9 @@ DATABASE_URL = os.getenv("DATABASE_URL") or "postgresql+asyncpg://stepik:stepik@
 DATABASE_ECHO = (os.getenv("DATABASE_ECHO") or "").lower() in ("1", "true", "yes")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-# самый дешёвый нормальный grok на openrouter
-GPT_MODEL = os.getenv("GPT_MODEL") or "x-ai/grok-4.3"
+# выбрана по прогону 20 реальных попыток (PROMPT_EVAL.md): смешнее, быстрее и дешевле grok,
+# и единственная из версий DeepSeek без пустых ответов
+GPT_MODEL = os.getenv("GPT_MODEL") or "deepseek/deepseek-v4.1-flash"
 
 ADMIN_USER = os.getenv("ADMIN_USER") or "admin"
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
