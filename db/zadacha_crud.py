@@ -1,9 +1,10 @@
 import json
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, func, or_, select, update
 
 from db.database import as_dict, get_session
-from db.models import Solution, Task
+from db.models import Event, Solution, Task
 
 
 async def add_task(
@@ -153,16 +154,26 @@ async def get_recent_attempts(user_id: int, task_id: int, limit: int = 3):
 
 
 async def attempts_today(user_id: int) -> int:
-    # для лимита попыток в сутки
+    # за последние сутки, не с полуночи: так лимит нельзя обойти, дождавшись 00:00
+    since = datetime.now(timezone.utc) - timedelta(days=1)
     async with get_session() as session:
         return (
             await session.execute(
                 select(func.count())
                 .select_from(Solution)
-                .where(
-                    Solution.user_id == user_id,
-                    Solution.created_at >= func.now() - func.make_interval(0, 0, 0, 1),
-                )
+                .where(Solution.user_id == user_id, Solution.created_at >= since)
+            )
+        ).scalar_one()
+
+
+async def hints_today(user_id: int) -> int:
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(func.count())
+                .select_from(Event)
+                .where(Event.user_id == user_id, Event.kind == "hint", Event.created_at >= since)
             )
         ).scalar_one()
 

@@ -32,6 +32,21 @@ from handlers.offer import offer_loop, offer_parents, offer_trial
 from handlers.start_handler import choose_toxic, open_settings, settings_command, start_handler
 
 
+async def on_error(update: object, context):
+    # без этого пользователь видит тишину, а мы — только трейс в логе
+    logging.getLogger(__name__).exception("необработанная ошибка", exc_info=context.error)
+    chat = getattr(update, "effective_chat", None)
+    if chat is None:
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="Что-то сломалось у нас, не у тебя. Попробуй ещё раз или нажми /start.",
+        )
+    except Exception:
+        pass
+
+
 async def on_startup(app):
     await db_startup()
     await start_admin()
@@ -115,6 +130,7 @@ def main():
         name="conversation_handler",
     )
     application.add_handler(conversation_handler)
+    application.add_error_handler(on_error)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

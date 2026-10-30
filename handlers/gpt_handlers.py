@@ -7,6 +7,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Upda
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
+from config.config import ATTEMPTS_PER_DAY, HINTS_PER_DAY
 from config.states import MAIN_MENU, MODULS, SOLVING
 from db.module_crud import get_module, get_modules
 from db.personal_crud import (
@@ -20,6 +21,8 @@ from db.topic_crud import get_topic, get_topics_by_module_id
 from db.users_crud import get_user
 from db.zadacha_crud import (
     add_solution,
+    attempts_today,
+    hints_today,
     count_solved,
     get_attempt_count,
     get_recent_attempts,
@@ -468,6 +471,35 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Эта задача не твоя или её уже нет.")
         return MAIN_MENU
 
+    if await attempts_today(user["id"]) >= ATTEMPTS_PER_DAY:
+        await update.message.reply_text(
+            f"На сегодня всё: {ATTEMPTS_PER_DAY} попыток за сутки. "
+            "Отдохни, завтра разнесу с новыми силами."
+        )
+        return SOLVING
+
+    lock = user_lock(user["id"])
+    if lock.locked():
+        await update.message.reply_text("Подожди, ещё проверяю прошлый код.")
+        return SOLVING
+
+    async with lock:
+        return await _check_solution(update, context, task, user)
+
+
+# одна проверка на пользователя за раз: иначе флуд кодом плодит контейнеры
+_user_locks: dict[int, asyncio.Lock] = {}
+
+
+def user_lock(user_id: int) -> asyncio.Lock:
+    lock = _user_locks.get(user_id)
+    if lock is None:
+        lock = _user_locks[user_id] = asyncio.Lock()
+    return lock
+
+
+async def _check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE, task: dict, user: dict):
+    task_id = task["id"]
     # Убираем кривые кавычки, заменяя из на обычные
     user_code = fix_quotes(update.message.text)
     wait = await update.message.reply_text("Проверяю решение...")
@@ -556,20 +588,31 @@ async def send_hint(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Эта задача не твоя или её уже нет.")
         return SOLVING
 
+    if await hints_today(user["id"]) >= HINTS_PER_DAY:
+        await query.message.reply_text(
+            f"Подсказок на сегодня больше нет — было {HINTS_PER_DAY}. Попробуй сам, ты ближе, чем думаешь."
+        )
+        return SOLVING
+
     await track(user["id"], "hint", {"task_id": task_id})
     wait = await query.message.reply_text("Думаю над подсказкой...")
     attempt_count = await get_attempt_count(user["id"], task_id)
     recent_attempts = await get_recent_attempts(user["id"], task_id)
 
-    hint = await give_hint(
-        code,
-        task["description"],
-        report or "",
-        user["toxic_level"],
-        attempt_count,
-        recent_attempts,
-    )
-    hint = fit_tg_html(hint, 4000)
+    try:
+        hint = await give_hint(
+            code,
+            task["description"],
+            report or "",
+            user["toxic_level"],
+            attempt_count,
+            recent_attempts,
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("подсказка не пришла")
+        await wait.edit_text("Нейронка сейчас не отвечает. Нажми «Дай подсказку» ещё раз через минуту.")
+        return SOLVING
+    hint = fit_tg_html(hint or "Подсказка вышла пустой — нажми ещё раз.", 4000)
     await wait.edit_text(hint, parse_mode="HTML")
     return SOLVING
 
