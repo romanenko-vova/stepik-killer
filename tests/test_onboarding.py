@@ -13,6 +13,14 @@ from handlers.start_handler import parse_source, start_handler
 from tests.fakes import make_context, make_update
 
 
+async def title_by_key(key: str) -> str:
+    # тесты не завязаны на тексты каталога: его переписывают отдельно
+    from db.models import Task
+
+    async with get_session() as session:
+        return (await session.execute(select(Task.title).where(Task.cat_key == key))).scalar_one()
+
+
 def test_parse_source_accepts_only_safe_values():
     assert parse_source(["reel_12"]) == "reel_12"
     assert parse_source(["tiktok-3"]) == "tiktok-3"
@@ -32,8 +40,8 @@ async def test_new_user_gets_first_task_immediately():
     texts = [m["text"] for m in bot.sent]
     assert "NotToxicPythonbot" in texts[0]
     assert "Романенко" not in texts[0]
-    # стартовый набор не задан — первая задача каталога
-    assert "Задание 1. Приветствие" in texts[1]
+    # стартовый набор не задан — первая задача каталога, каким бы он ни был
+    assert (await title_by_key("01-01-01")) in texts[1]
     assert context.user_data["task_id"]
 
     user = await get_user(5001)
@@ -62,7 +70,7 @@ async def test_next_task_walks_starter_keys_then_course(monkeypatch):
     upd, bot = make_update(tg_id=5003)
     await start_handler(upd, make_context(bot))
     user = await get_user(5003)
-    assert "Задание 1. Счёт до n" in bot.sent[1]["text"]
+    assert (await title_by_key("02-01-01")) in bot.sent[1]["text"]
 
     first = await next_task_for(user["id"])
     assert first["cat_key"] == "02-01-01"
