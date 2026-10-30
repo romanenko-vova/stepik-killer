@@ -4,10 +4,10 @@ db: ## поднять Postgres в docker (127.0.0.1:5434)
 	docker compose up -d db
 
 migrate: ## накатить миграции
-	.venv/bin/alembic upgrade head
+	.venv/bin/python -m alembic upgrade head
 
 migration: ## новая миграция: make migration MESSAGE="что меняем"
-	.venv/bin/alembic revision -m "$(MESSAGE)"
+	.venv/bin/python -m alembic revision -m "$(MESSAGE)"
 
 run: ## бот с перезапуском при правке файлов
 	watchfiles --filter python --ignore-path .venv,__pycache__ ".venv/bin/python main.py"
