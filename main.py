@@ -12,9 +12,9 @@ from telegram.ext import (
 )
 
 from admin.app import start_admin
-from config.config import TOKEN
+from config.config import STATE_PATH, TOKEN
 from config.states import MAIN_MENU, MODULS, SETTINGS, SOLVING, TOXIC_LEVEL_CHOICE
-from db.database import create_tables
+from db.database import on_startup as db_startup
 from handlers.gpt_handlers import (
     check_solution,
     open_modul,
@@ -30,7 +30,7 @@ from handlers.start_handler import choose_toxic, open_settings, start_handler
 
 
 async def on_startup(app):
-    await create_tables(app)
+    await db_startup()
     await start_admin()
 
 
@@ -41,7 +41,7 @@ def main():
     )
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    persistence = PicklePersistence(filepath="conversation_state.pkl")
+    persistence = PicklePersistence(filepath=STATE_PATH)
     application = (
         ApplicationBuilder()
         .token(TOKEN)

@@ -1,6 +1,9 @@
-import aiosqlite
+from sqlalchemy import and_, func, select
+from sqlalchemy.orm import aliased
 
-from config.config import DB_PATH
+from db.database import get_session
+from db.models import Solution, Task, User
+from db.personal_crud import mark_for, task_status_columns
 
 
 def person_name(user: dict) -> str:
@@ -12,135 +15,118 @@ def person_name(user: dict) -> str:
 
 
 async def list_students() -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT COUNT(*) FROM tasks WHERE set_id IS NULL")
-        total = (await cur.fetchone())[0]
-        cur = await conn.execute(
-            """
-            SELECT
-                u.id,
-                u.id_tg,
-                u.username,
-                u.first_name,
-                u.created_at,
-                (
-                    SELECT COUNT(DISTINCT s.task_id)
-                    FROM solutions s
-                    JOIN tasks t ON t.id = s.task_id
-                    WHERE s.user_id = u.id
-                      AND t.set_id IS NULL
-                      AND s.status = 'ok'
-                      AND s.content_sig IS NOT NULL
-                      AND s.content_sig = t.content_sig
-                ) AS solved,
-                (
-                    SELECT COUNT(DISTINCT s.task_id)
-                    FROM solutions s
-                    JOIN tasks t ON t.id = s.task_id
-                    WHERE s.user_id = u.id
-                      AND t.set_id IS NULL
-                      AND s.status = 'ok'
-                      AND (
-                        s.content_sig IS NULL
-                        OR s.content_sig != t.content_sig
-                      )
-                      AND s.task_id NOT IN (
-                        SELECT s2.task_id
-                        FROM solutions s2
-                        JOIN tasks t2 ON t2.id = s2.task_id
-                        WHERE s2.user_id = u.id
-                          AND t2.set_id IS NULL
-                          AND s2.status = 'ok'
-                          AND s2.content_sig IS NOT NULL
-                          AND s2.content_sig = t2.content_sig
-                      )
-                ) AS stale,
-                (SELECT COUNT(*) FROM solutions WHERE user_id = u.id) AS attempts,
-                (SELECT MAX(created_at) FROM solutions WHERE user_id = u.id) AS last_try
-            FROM users u
-            ORDER BY (last_try IS NULL), last_try DESC
-            """
+    s = aliased(Solution)
+    t = aliased(Task)
+    s2 = aliased(Solution)
+    t2 = aliased(Task)
+
+    current = and_(
+        s.status == "ok",
+        s.content_sig.is_not(None),
+        s.content_sig == t.content_sig,
+    )
+    solved = (
+        select(func.count(func.distinct(s.task_id)))
+        .select_from(s)
+        .join(t, t.id == s.task_id)
+        .where(s.user_id == User.id, t.set_id.is_(None), current)
+        .scalar_subquery()
+    )
+    # решал старую версию и не перерешал новую
+    solved_now = (
+        select(s2.task_id)
+        .join(t2, t2.id == s2.task_id)
+        .where(
+            s2.user_id == User.id,
+            t2.set_id.is_(None),
+            s2.status == "ok",
+            s2.content_sig.is_not(None),
+            s2.content_sig == t2.content_sig,
         )
-        rows = [dict(r) for r in await cur.fetchall()]
+    )
+    stale = (
+        select(func.count(func.distinct(s.task_id)))
+        .select_from(s)
+        .join(t, t.id == s.task_id)
+        .where(
+            s.user_id == User.id,
+            t.set_id.is_(None),
+            s.status == "ok",
+            (s.content_sig.is_(None)) | (s.content_sig != t.content_sig),
+            s.task_id.not_in(solved_now),
+        )
+        .scalar_subquery()
+    )
+    attempts = select(func.count()).select_from(s).where(s.user_id == User.id).scalar_subquery()
+    last_try = select(func.max(s.created_at)).where(s.user_id == User.id).scalar_subquery()
+
+    async with get_session() as session:
+        total = (
+            await session.execute(select(func.count()).select_from(Task).where(Task.set_id.is_(None)))
+        ).scalar_one()
+        rows = await session.execute(
+            select(
+                User.id,
+                User.id_tg,
+                User.username,
+                User.first_name,
+                User.created_at,
+                solved.label("solved"),
+                stale.label("stale"),
+                attempts.label("attempts"),
+                last_try.label("last_try"),
+            ).order_by(last_try.is_(None), last_try.desc())
+        )
+        out = []
         for row in rows:
-            row["total"] = total
-            row["name"] = person_name(row)
-        return rows
+            item = dict(row._mapping)
+            item["total"] = total
+            item["name"] = person_name(item)
+            out.append(item)
+        return out
 
 
 async def student_tasks(user_pk: int) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute(
-            """
-            SELECT
-                t.id,
-                t.title,
-                t.topic,
-                t.content_sig,
-                (
-                    SELECT s.status
-                    FROM solutions s
-                    WHERE s.user_id = ? AND s.task_id = t.id
-                    ORDER BY s.id DESC
-                    LIMIT 1
-                ) AS last_status,
-                (
-                    SELECT s.created_at
-                    FROM solutions s
-                    WHERE s.user_id = ? AND s.task_id = t.id
-                    ORDER BY s.id DESC
-                    LIMIT 1
-                ) AS last_try,
-                (
-                    SELECT COUNT(*)
-                    FROM solutions s
-                    WHERE s.user_id = ? AND s.task_id = t.id
-                ) AS attempts,
-                EXISTS(
-                    SELECT 1 FROM solutions s
-                    WHERE s.user_id = ? AND s.task_id = t.id
-                      AND s.status = 'ok'
-                      AND s.content_sig IS NOT NULL
-                      AND s.content_sig = t.content_sig
-                ) AS current_ok,
-                EXISTS(
-                    SELECT 1 FROM solutions s
-                    WHERE s.user_id = ? AND s.task_id = t.id
-                      AND s.status = 'ok'
-                ) AS ever_ok
-            FROM tasks t
-            WHERE t.set_id IS NULL
-            ORDER BY t.id
-            """,
-            (user_pk, user_pk, user_pk, user_pk, user_pk),
+    attempts, last_try, last_status, current_ok, ever_ok = task_status_columns(user_pk)
+    async with get_session() as session:
+        rows = await session.execute(
+            select(
+                Task.id,
+                Task.title,
+                Task.topic,
+                Task.content_sig,
+                last_status.label("last_status"),
+                last_try.label("last_try"),
+                attempts.label("attempts"),
+                current_ok.label("current_ok"),
+                ever_ok.label("ever_ok"),
+            )
+            .where(Task.set_id.is_(None))
+            .order_by(Task.id)
         )
-        rows = [dict(r) for r in await cur.fetchall()]
+        out = []
         for row in rows:
-            if row["current_ok"]:
-                row["mark"] = "ok"
-            elif row["ever_ok"]:
-                row["mark"] = "stale"
-            elif row["attempts"]:
-                row["mark"] = "fail"
-            else:
-                row["mark"] = "none"
-        return rows
+            item = dict(row._mapping)
+            item["mark"] = mark_for(item)
+            out.append(item)
+        return out
 
 
 async def student_solutions(user_pk: int, task_id: int) -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute(
-            """
-            SELECT s.id, s.code, s.status, s.content_sig, s.created_at,
-                   s.tests_json, s.review, t.content_sig AS task_sig
-            FROM solutions s
-            JOIN tasks t ON t.id = s.task_id
-            WHERE s.user_id = ? AND s.task_id = ?
-            ORDER BY s.id DESC
-            """,
-            (user_pk, task_id),
+    async with get_session() as session:
+        rows = await session.execute(
+            select(
+                Solution.id,
+                Solution.code,
+                Solution.status,
+                Solution.content_sig,
+                Solution.created_at,
+                Solution.tests_json,
+                Solution.review,
+                Task.content_sig.label("task_sig"),
+            )
+            .join(Task, Task.id == Solution.task_id)
+            .where(Solution.user_id == user_pk, Solution.task_id == task_id)
+            .order_by(Solution.id.desc())
         )
-        return [dict(r) for r in await cur.fetchall()]
+        return [dict(row._mapping) for row in rows]

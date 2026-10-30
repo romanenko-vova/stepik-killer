@@ -1,0 +1,25 @@
+# База для бота. Сам бот крутится под pm2 на хосте: ему нужен docker для песочницы,
+# и запускать docker из контейнера ради этого не стоит.
+#   docker compose up -d db
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stepik}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stepik}
+      POSTGRES_DB: ${POSTGRES_DB:-stepik_killer}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # только localhost: наружу база не торчит
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stepik} -d ${POSTGRES_DB:-stepik_killer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db_data:
+    name: stepik_killer_db_data

@@ -11,10 +11,11 @@ import hashlib
 import json
 from pathlib import Path
 
-import aiosqlite
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 
-from config.config import DB_PATH
-from db.module_crud import get_modules
+from db.database import get_session
+from db.models import CatalogMeta, Module, Solution, Task, Topic
 
 CATALOG_PATH = Path(__file__).with_name("catalog.json")
 
@@ -53,81 +54,62 @@ def flatten_catalog(catalog: list) -> list[tuple]:
 
 
 async def saved_sig() -> str | None:
-    async with aiosqlite.connect(DB_PATH) as conn:
-        cur = await conn.execute("SELECT sig FROM catalog_meta WHERE id = 1")
-        row = await cur.fetchone()
-        return row[0] if row else None
+    async with get_session() as session:
+        meta = await session.get(CatalogMeta, 1)
+        return meta.sig if meta else None
 
 
 async def save_sig(sig: str):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        await conn.execute(
-            "INSERT OR REPLACE INTO catalog_meta(id, sig) VALUES (1, ?)",
-            (sig,),
+    async with get_session() as session:
+        await session.execute(
+            insert(CatalogMeta)
+            .values(id=1, sig=sig)
+            .on_conflict_do_update(index_elements=[CatalogMeta.id], set_={"sig": sig})
         )
-        await conn.commit()
+        await session.commit()
 
 
-async def _upsert_module(conn, title: str, description: str | None) -> int:
-    cur = await conn.execute("SELECT id FROM modules WHERE title = ?", (title,))
-    row = await cur.fetchone()
-    if row:
-        await conn.execute(
-            "UPDATE modules SET description = ? WHERE id = ?",
-            (description, row[0]),
-        )
-        return row[0]
-    cur = await conn.execute(
-        "INSERT INTO modules(title, description) VALUES(?, ?)",
-        (title, description),
-    )
-    return cur.lastrowid
+async def _upsert_module(session, title: str, description: str | None) -> int:
+    module = (await session.execute(select(Module).where(Module.title == title))).scalars().first()
+    if module:
+        module.description = description
+        return module.id
+    module = Module(title=title, description=description)
+    session.add(module)
+    await session.flush()
+    return module.id
 
 
-async def _upsert_topic(conn, title: str, module_id: int) -> int:
-    cur = await conn.execute(
-        "SELECT id FROM topics WHERE module_id = ? AND title = ?",
-        (module_id, title),
-    )
-    row = await cur.fetchone()
-    if row:
-        return row[0]
-    cur = await conn.execute(
-        "INSERT INTO topics(title, module_id) VALUES(?, ?)",
-        (title, module_id),
-    )
-    return cur.lastrowid
+async def _upsert_topic(session, title: str, module_id: int) -> int:
+    topic = (
+        await session.execute(select(Topic).where(Topic.module_id == module_id, Topic.title == title))
+    ).scalars().first()
+    if topic:
+        return topic.id
+    topic = Topic(title=title, module_id=module_id)
+    session.add(topic)
+    await session.flush()
+    return topic.id
 
 
 async def seed_if_empty():
     sig = catalog_sig()
-    if await saved_sig() == sig and await get_modules():
+    async with get_session() as session:
+        has_modules = (await session.execute(select(Module.id).limit(1))).first() is not None
+    if await saved_sig() == sig and has_modules:
         return
 
     catalog = load_catalog()
     items = flatten_catalog(catalog)
 
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-
+    async with get_session() as session:
         for module in catalog:
-            module_id = await _upsert_module(conn, module["title"], module.get("description"))
+            module_id = await _upsert_module(session, module["title"], module.get("description"))
             for topic in module["topics"]:
-                await _upsert_topic(conn, topic["title"], module_id)
+                await _upsert_topic(session, topic["title"], module_id)
 
-        cur = await conn.execute("SELECT * FROM tasks")
-        rows = [dict(r) for r in await cur.fetchall()]
-        by_key = {r["cat_key"]: r for r in rows if r.get("cat_key")}
-
-        # старая база без ключей — клеим по порядку id, решения не теряются
-        if not by_key and rows:
-            for row, (key, *_rest) in zip(rows, items):
-                await conn.execute(
-                    "UPDATE tasks SET cat_key = ? WHERE id = ?",
-                    (key, row["id"]),
-                )
-                row["cat_key"] = key
-                by_key[key] = row
+        rows = (await session.execute(select(Task).where(Task.set_id.is_(None)))).scalars().all()
+        by_key = {row.cat_key: row for row in rows if row.cat_key}
 
         for key, _module, topic, task in items:
             tests_json = json.dumps(task["tests"], ensure_ascii=False)
@@ -136,59 +118,40 @@ async def seed_if_empty():
             existing = by_key.get(key)
 
             if existing:
-                old_sig = existing.get("content_sig") or content_sig(
-                    existing["title"],
-                    existing["description"],
-                    existing["tests"],
-                    existing.get("image"),
+                old_sig = existing.content_sig or content_sig(
+                    existing.title, existing.description, existing.tests, existing.image
                 )
                 # старым попыткам ставим подпись той версии, на которой их сдавали
-                await conn.execute(
-                    """UPDATE solutions
-                       SET content_sig = ?
-                       WHERE task_id = ? AND content_sig IS NULL""",
-                    (old_sig, existing["id"]),
+                await session.execute(
+                    update(Solution)
+                    .where(Solution.task_id == existing.id, Solution.content_sig.is_(None))
+                    .values(content_sig=old_sig)
                 )
-                await conn.execute(
-                    """UPDATE tasks
-                       SET title = ?, topic = ?, difficulty = ?, description = ?,
-                           tests = ?, image = ?, content_sig = ?, cat_key = ?
-                       WHERE id = ?""",
-                    (
-                        task["title"],
-                        topic["title"],
-                        task["difficulty"],
-                        task["description"],
-                        tests_json,
-                        image,
-                        new_sig,
-                        key,
-                        existing["id"],
-                    ),
-                )
+                existing.title = task["title"]
+                existing.topic = topic["title"]
+                existing.difficulty = task["difficulty"]
+                existing.description = task["description"]
+                existing.tests = tests_json
+                existing.image = image
+                existing.content_sig = new_sig
             else:
-                await conn.execute(
-                    """INSERT INTO tasks(
-                           title, topic, difficulty, description, tests, image, cat_key, content_sig
-                       ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        task["title"],
-                        topic["title"],
-                        task["difficulty"],
-                        task["description"],
-                        tests_json,
-                        image,
-                        key,
-                        new_sig,
-                    ),
+                session.add(
+                    Task(
+                        title=task["title"],
+                        topic=topic["title"],
+                        difficulty=task["difficulty"],
+                        description=task["description"],
+                        tests=tests_json,
+                        image=image,
+                        cat_key=key,
+                        content_sig=new_sig,
+                    )
                 )
 
-        await conn.commit()
+        await session.commit()
 
     await save_sig(sig)
 
 
 if __name__ == "__main__":
-    from db.database import create_tables
-
-    asyncio.run(create_tables(None))
+    asyncio.run(seed_if_empty())

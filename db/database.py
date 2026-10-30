@@ -1,115 +1,40 @@
-import aiosqlite
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
-from config.config import DB_PATH
+from sqlalchemy import inspect
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from config.config import DATABASE_ECHO, DATABASE_URL
+
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=DATABASE_ECHO,
+    pool_size=10,
+    max_overflow=10,
+    pool_pre_ping=True,
+)
+
+AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-async def _ensure_column(conn, table: str, name: str, decl: str):
-    cur = await conn.execute(f"PRAGMA table_info({table})")
-    cols = [row[1] for row in await cur.fetchall()]
-    if name not in cols:
-        await conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+@asynccontextmanager
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    session = AsyncSessionLocal()
+    try:
+        yield session
+    finally:
+        await session.close()
 
 
-async def create_tables(app):
-    conn = await aiosqlite.connect(DB_PATH)
+def as_dict(obj) -> dict | None:
+    # хендлеры и админка исторически работают со словарями из sqlite — не ломаем им жизнь
+    if obj is None:
+        return None
+    return {attr.key: getattr(obj, attr.key) for attr in inspect(obj).mapper.column_attrs}
 
-    # кто пользуется ботом и какой тон выбрал
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS users(
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            id_tg INTEGER UNIQUE,
-                            username TEXT NULL,
-                            first_name TEXT NULL,
-                            toxic_level INTEGER DEFAULT 0,
-                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
-    )
 
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS modules(
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            title TEXT NOT NULL,
-                            description TEXT NULL,
-                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
-    )
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS topics(
-                                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                title TEXT NOT NULL,
-                                description TEXT NULL,
-                                module_id INTEGER,
-                                created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"""
-    )
-
-    # topic — название темы, tests — json со списком тестов
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS tasks(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        topic TEXT NOT NULL,
-        difficulty INTEGER NOT NULL CHECK(difficulty BETWEEN 1 AND 3),
-        description TEXT NOT NULL,
-        tests TEXT NOT NULL,
-        image TEXT,
-        cat_key TEXT,
-        content_sig TEXT)"""
-    )
-
-    # личный блок: владелец в user_id, кто его видит — в personal_set_access
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS personal_sets(
-                            id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            user_id INTEGER NOT NULL,
-                            title TEXT NOT NULL,
-                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE)"""
-    )
-
-    # кто ещё видит блок, кроме владельца. Саша и преподаватель смотрят одни и те же
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS personal_set_access(
-                            set_id INTEGER NOT NULL,
-                            user_id INTEGER NOT NULL,
-                            PRIMARY KEY (set_id, user_id))"""
-    )
-
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS catalog_meta(
-                            id INTEGER PRIMARY KEY CHECK (id = 1),
-                            sig TEXT NOT NULL)"""
-    )
-
-    await conn.execute(
-        """CREATE TABLE IF NOT EXISTS solutions(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        task_id INTEGER NOT NULL,
-        code TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'new',
-        content_sig TEXT,
-        tests_json TEXT,
-        review TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE)"""
-    )
-
-    # старые базы — докидываем колонки, не ломая данные
-    await _ensure_column(conn, "tasks", "image", "TEXT")
-    await _ensure_column(conn, "tasks", "cat_key", "TEXT")
-    await _ensure_column(conn, "tasks", "content_sig", "TEXT")
-    await _ensure_column(conn, "tasks", "set_id", "INTEGER")
-    # порядок внутри личного блока. У задач курса пусто, они как раньше идут по id
-    await _ensure_column(conn, "tasks", "pos", "INTEGER")
-    await _ensure_column(conn, "solutions", "content_sig", "TEXT")
-    await _ensure_column(conn, "solutions", "tests_json", "TEXT")
-    await _ensure_column(conn, "solutions", "review", "TEXT")
-    await _ensure_column(conn, "users", "first_name", "TEXT")
-
-    await conn.commit()
-    await conn.close()
-
-    # стартовый каталог кладём сразу при запуске бота
+async def on_startup():
+    # схему создаёт alembic (`alembic upgrade head`), тут только наполнение
     from db.seed import seed_if_empty
     from db.weekend_sets import ensure_weekend_sets
 

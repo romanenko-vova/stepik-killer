@@ -1,8 +1,9 @@
 import json
 
-import aiosqlite
+from sqlalchemy import and_, func, or_, select, update
 
-from config.config import DB_PATH
+from db.database import as_dict, get_session
+from db.models import Solution, Task
 
 
 async def add_task(
@@ -13,89 +14,91 @@ async def add_task(
     tests_json: str,
     image: str | None = None,
 ):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        cursor = await conn.execute(
-            """INSERT INTO tasks(title, topic, difficulty, description, tests, image)
-                VALUES(?, ?, ?, ?, ?, ?)""",
-            (title, topic, difficulty, description, tests_json, image),
+    async with get_session() as session:
+        task = Task(
+            title=title,
+            topic=topic,
+            difficulty=difficulty,
+            description=description,
+            tests=tests_json,
+            image=image,
         )
-        await conn.commit()
-        return cursor.lastrowid
+        session.add(task)
+        await session.commit()
+        return task.id
 
 
 async def get_task(task_id: int):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-        task = await cur.fetchone()
-        if task is None:
-            return None
-        return dict(task)
+    async with get_session() as session:
+        return as_dict(await session.get(Task, task_id))
 
 
 async def get_tasks_by_topic(topic_title: str):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute(
-            # set_id — личные задачи, в общую тему их не мешаем
-            "SELECT * FROM tasks WHERE topic = ? AND set_id IS NULL ORDER BY id",
-            (topic_title,),
-        )
-        tasks = await cur.fetchall()
-        for i in range(len(tasks)):
-            tasks[i] = dict(tasks[i])
-        return tasks
+    # set_id — личные задачи, в общую тему их не мешаем
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(Task).where(Task.topic == topic_title, Task.set_id.is_(None)).order_by(Task.id)
+            )
+        ).scalars().all()
+        return [as_dict(row) for row in rows]
+
+
+def _current_ok():
+    # решение засчитано на ТЕКУЩЕЙ версии условия
+    return and_(
+        Solution.status == "ok",
+        Solution.content_sig.is_not(None),
+        Solution.content_sig == Task.content_sig,
+    )
 
 
 async def get_solved_task_ids(user_id: int, catalog_only: bool = False) -> set[int]:
-    # только те, что закрыты на ТЕКУЩЕЙ версии условия
-    catalog = "AND t.set_id IS NULL" if catalog_only else ""
-    async with aiosqlite.connect(DB_PATH) as conn:
-        cur = await conn.execute(
-            f"""SELECT DISTINCT s.task_id
-               FROM solutions s
-               JOIN tasks t ON t.id = s.task_id
-               WHERE s.user_id = ?
-                 AND s.status = 'ok'
-                 AND s.content_sig IS NOT NULL
-                 AND s.content_sig = t.content_sig
-                 {catalog}""",
-            (user_id,),
-        )
-        rows = await cur.fetchall()
-        return {row[0] for row in rows}
+    query = (
+        select(Solution.task_id)
+        .join(Task, Task.id == Solution.task_id)
+        .where(Solution.user_id == user_id, _current_ok())
+        .distinct()
+    )
+    if catalog_only:
+        query = query.where(Task.set_id.is_(None))
+    async with get_session() as session:
+        return set((await session.execute(query)).scalars().all())
 
 
 async def get_stale_task_ids(user_id: int, catalog_only: bool = False) -> set[int]:
     # когда-то решил, но задача с тех пор поменялась
     solved = await get_solved_task_ids(user_id, catalog_only=catalog_only)
-    catalog = "AND t.set_id IS NULL" if catalog_only else ""
-    async with aiosqlite.connect(DB_PATH) as conn:
-        cur = await conn.execute(
-            f"""SELECT DISTINCT s.task_id
-               FROM solutions s
-               JOIN tasks t ON t.id = s.task_id
-               WHERE s.user_id = ?
-                 AND s.status = 'ok'
-                 AND (
-                   s.content_sig IS NULL
-                   OR s.content_sig != t.content_sig
-                 )
-                 {catalog}""",
-            (user_id,),
+    query = (
+        select(Solution.task_id)
+        .join(Task, Task.id == Solution.task_id)
+        .where(
+            Solution.user_id == user_id,
+            Solution.status == "ok",
+            or_(Solution.content_sig.is_(None), Solution.content_sig != Task.content_sig),
         )
-        rows = await cur.fetchall()
-        return {row[0] for row in rows} - solved
+        .distinct()
+    )
+    if catalog_only:
+        query = query.where(Task.set_id.is_(None))
+    async with get_session() as session:
+        return set((await session.execute(query)).scalars().all()) - solved
 
 
 async def get_progress(user_id: int) -> tuple[int, int, int]:
     # личные задачи в общий прогресс курса не входят
-    async with aiosqlite.connect(DB_PATH) as conn:
-        cur = await conn.execute("SELECT COUNT(*) FROM tasks WHERE set_id IS NULL")
-        total = (await cur.fetchone())[0]
+    async with get_session() as session:
+        total = (
+            await session.execute(select(func.count()).select_from(Task).where(Task.set_id.is_(None)))
+        ).scalar_one()
     solved = len(await get_solved_task_ids(user_id, catalog_only=True))
     stale = len(await get_stale_task_ids(user_id, catalog_only=True))
     return solved, total, stale
+
+
+async def count_solved(user_id: int) -> int:
+    # всё решённое на текущих версиях: и курс, и личные блоки
+    return len(await get_solved_task_ids(user_id))
 
 
 async def add_solution(
@@ -105,48 +108,60 @@ async def add_solution(
     status: str = "new",
     tests_report: list | None = None,
 ):
-    task = await get_task(task_id)
-    sig = task.get("content_sig") if task else None
     tests_json = json.dumps(tests_report, ensure_ascii=False) if tests_report is not None else None
-    async with aiosqlite.connect(DB_PATH) as conn:
-        cursor = await conn.execute(
-            """INSERT INTO solutions(user_id, task_id, code, status, content_sig, tests_json)
-                VALUES(?, ?, ?, ?, ?, ?)""",
-            (user_id, task_id, code, status, sig, tests_json),
+    async with get_session() as session:
+        task = await session.get(Task, task_id)
+        solution = Solution(
+            user_id=user_id,
+            task_id=task_id,
+            code=code,
+            status=status,
+            content_sig=task.content_sig if task else None,
+            tests_json=tests_json,
         )
-        await conn.commit()
-        return cursor.lastrowid
+        session.add(solution)
+        await session.commit()
+        return solution.id
 
 
 async def set_solution_review(solution_id: int, review: str):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        await conn.execute(
-            "UPDATE solutions SET review = ? WHERE id = ?",
-            (review, solution_id),
-        )
-        await conn.commit()
+    async with get_session() as session:
+        await session.execute(update(Solution).where(Solution.id == solution_id).values(review=review))
+        await session.commit()
 
 
 async def get_attempt_count(user_id: int, task_id: int) -> int:
-    async with aiosqlite.connect(DB_PATH) as conn:
-        cur = await conn.execute(
-            "SELECT COUNT(*) FROM solutions WHERE user_id = ? AND task_id = ?",
-            (user_id, task_id),
-        )
-        result = await cur.fetchone()
-        return result[0]
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(func.count())
+                .select_from(Solution)
+                .where(Solution.user_id == user_id, Solution.task_id == task_id)
+            )
+        ).scalar_one()
 
 
 async def get_recent_attempts(user_id: int, task_id: int, limit: int = 3):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute(
-            """SELECT code, status, created_at
-               FROM solutions
-               WHERE user_id = ? AND task_id = ?
-               ORDER BY id DESC
-               LIMIT ?""",
-            (user_id, task_id, limit),
+    async with get_session() as session:
+        rows = await session.execute(
+            select(Solution.code, Solution.status, Solution.created_at, Solution.review)
+            .where(Solution.user_id == user_id, Solution.task_id == task_id)
+            .order_by(Solution.id.desc())
+            .limit(limit)
         )
-        attempts = await cur.fetchall()
-        return [dict(attempt) for attempt in reversed(attempts)]
+        return [dict(row._mapping) for row in reversed(rows.all())]
+
+
+async def attempts_today(user_id: int) -> int:
+    # для лимита попыток в сутки
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(func.count())
+                .select_from(Solution)
+                .where(
+                    Solution.user_id == user_id,
+                    Solution.created_at >= func.now() - func.make_interval(0, 0, 0, 1),
+                )
+            )
+        ).scalar_one()

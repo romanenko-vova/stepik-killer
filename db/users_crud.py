@@ -1,63 +1,59 @@
-import aiosqlite
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 
-from config.config import DB_PATH
+from db.database import as_dict, get_session
+from db.models import User
 
 
 async def get_user(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT * FROM users WHERE id_tg = ?", (user_id,))
-        user = await cur.fetchone()
-        if user is None:
-            return None
-        return dict(user)
+    # user_id здесь — id в телеграме, так исторически
+    async with get_session() as session:
+        user = (await session.execute(select(User).where(User.id_tg == user_id))).scalar_one_or_none()
+        return as_dict(user)
 
 
 async def list_users() -> list[dict]:
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute(
-            """SELECT id, id_tg, username, first_name
-               FROM users
-               ORDER BY first_name, username, id"""
+    async with get_session() as session:
+        rows = await session.execute(
+            select(User.id, User.id_tg, User.username, User.first_name).order_by(
+                User.first_name.nulls_last(), User.username.nulls_last(), User.id
+            )
         )
-        return [dict(row) for row in await cur.fetchall()]
+        return [dict(row._mapping) for row in rows]
 
 
 async def get_user_by_id(pk: int):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        conn.row_factory = aiosqlite.Row
-        cur = await conn.execute("SELECT * FROM users WHERE id = ?", (pk,))
-        user = await cur.fetchone()
-        if user is None:
-            return None
-        return dict(user)
+    async with get_session() as session:
+        return as_dict(await session.get(User, pk))
 
 
-async def create_user(user_id: int, username: str | None = None, first_name: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        await conn.execute(
-            "INSERT INTO users (id_tg, username, first_name) VALUES (?, ?, ?)",
-            (user_id, username, first_name),
+async def create_user(
+    user_id: int,
+    username: str | None = None,
+    first_name: str | None = None,
+    toxic_level: int = 0,
+):
+    # два быстрых /start подряд не должны падать на уникальности
+    async with get_session() as session:
+        await session.execute(
+            insert(User)
+            .values(id_tg=user_id, username=username, first_name=first_name, toxic_level=toxic_level)
+            .on_conflict_do_nothing(index_elements=[User.id_tg])
         )
-        await conn.commit()
+        await session.commit()
     return await get_user(user_id)
 
 
 async def touch_user(user_id: int, username: str | None = None, first_name: str | None = None):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        await conn.execute(
-            "UPDATE users SET username = ?, first_name = ? WHERE id_tg = ?",
-            (username, first_name, user_id),
+    async with get_session() as session:
+        await session.execute(
+            update(User).where(User.id_tg == user_id).values(username=username, first_name=first_name)
         )
-        await conn.commit()
+        await session.commit()
     return await get_user(user_id)
 
 
 async def set_toxic_level(user_id: int, level: int):
-    async with aiosqlite.connect(DB_PATH) as conn:
-        await conn.execute(
-            "UPDATE users SET toxic_level = ? WHERE id_tg = ?",
-            (level, user_id),
-        )
-        await conn.commit()
+    async with get_session() as session:
+        await session.execute(update(User).where(User.id_tg == user_id).values(toxic_level=level))
+        await session.commit()
