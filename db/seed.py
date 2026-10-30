@@ -1,9 +1,11 @@
 """
-Каталог курса «Питонификация» из db/catalog.json.
+Каталог курса «Перекус» из db/catalog.json (собирается из course/, см. COURSE.md).
 Кладётся сам при запуске бота. Вручную: python -m db.seed
 
-Задачи обновляем на месте по ключу. Решения не трогаем.
+Задачи обновляем на месте по ключу «модуль-тема-задача». Решения не трогаем.
 Если текст или тесты изменились — старые ok остаются, но в боте горит 🔄.
+Задачи, темы и модули, которых в каталоге больше нет, удаляются: иначе они висят
+в меню пустыми и раздувают «решено N из M». Решения по удалённым задачам уходят вместе с ними.
 """
 
 import asyncio
@@ -11,7 +13,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from db.database import get_session
@@ -92,6 +94,22 @@ async def _upsert_topic(session, title: str, module_id: int) -> int:
     return topic.id
 
 
+async def _drop_missing(session, catalog: list, keys: set[str]):
+    # всё, чего в каталоге больше нет. личные задачи (set_id) и задачи без ключа не трогаем
+    await session.execute(
+        delete(Task).where(Task.set_id.is_(None), Task.cat_key.is_not(None), Task.cat_key.not_in(keys))
+    )
+    topics_by_module = {module["title"]: {topic["title"] for topic in module["topics"]} for module in catalog}
+    modules = (await session.execute(select(Module))).scalars().all()
+    for module in modules:
+        if module.title not in topics_by_module:
+            await session.delete(module)  # темы уйдут каскадом
+            continue
+        await session.execute(
+            delete(Topic).where(Topic.module_id == module.id, Topic.title.not_in(topics_by_module[module.title]))
+        )
+
+
 async def seed_if_empty():
     sig = catalog_sig()
     async with get_session() as session:
@@ -148,6 +166,7 @@ async def seed_if_empty():
                     )
                 )
 
+        await _drop_missing(session, catalog, {key for key, *_ in items})
         await session.commit()
 
     await save_sig(sig)
