@@ -391,9 +391,13 @@ def result_markup(ok: bool, topic_id, set_id=None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-def check_text(attempt_count: int, results: list, ok: bool) -> str:
+def check_text(attempt_count: int, results: list, ok: bool, feedback: str = "") -> str:
+    # тесты короткие (до первого падения), разнос дописывается под ними
     verdict = "✅ Принято" if ok else "❌ Не принято"
-    return prepare_tg_html(f"<b>{verdict} · попытка №{attempt_count}</b>\n\n{format_tests_html(results)}", 4096)
+    text = f"<b>{verdict} · попытка №{attempt_count}</b>\n\n{format_tests_html(results)}"
+    if feedback:
+        text += "\n\n" + feedback
+    return prepare_tg_html(text, 4096)
 
 
 async def keep_typing(bot, chat_id: int, stop: asyncio.Event):
@@ -412,11 +416,12 @@ async def keep_typing(bot, chat_id: int, stop: asyncio.Event):
 async def attach_review(
     bot,
     chat_id: int,
-    tests_message_id: int,
+    message_id: int,
     ok: bool,
     topic_id,
     set_id,
     attempt_count: int,
+    results: list,
     user_code: str,
     condition: str,
     report: str,
@@ -424,7 +429,7 @@ async def attach_review(
     recent_attempts: list,
     solution_id: int | None = None,
 ):
-    """Разнос отдельным сообщением: приходит с уведомлением и не теряется над простынёй тестов."""
+    """Разнос дописывается внизу сообщения с тестами, кнопки остаются под ним."""
     stop = asyncio.Event()
     typing = asyncio.create_task(keep_typing(bot, chat_id, stop))
     try:
@@ -437,27 +442,19 @@ async def attach_review(
             recent_attempts,
             ok,
         )
-        stop.set()
         if not feedback.strip():
             return
         if solution_id:
             await set_solution_review(solution_id, feedback)
-        if ok:
-            await bot.send_message(chat_id=chat_id, text=feedback, parse_mode="HTML")
-            return
-        # кнопки переезжают под разнос: под тестами их больше не нужно
-        await bot.send_message(
+        await bot.edit_message_text(
             chat_id=chat_id,
-            text=prepare_tg_html(feedback, 4096),
+            message_id=message_id,
+            text=check_text(attempt_count, results, ok, feedback),
             parse_mode="HTML",
-            reply_markup=result_markup(ok, topic_id, set_id),
+            reply_markup=None if ok else result_markup(ok, topic_id, set_id),
         )
-        try:
-            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=tests_message_id, reply_markup=None)
-        except TelegramError:
-            pass
     except Exception:
-        logging.getLogger(__name__).exception("ревью не пришло")
+        logging.getLogger(__name__).exception("ревью не дописалось")
     finally:
         stop.set()
         await typing
@@ -538,7 +535,7 @@ async def _check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
     markup = result_markup(ok, topic_id, set_id)
     text = check_text(attempt_count, results, ok)
 
-    # тесты сразу, разнос придёт отдельным сообщением
+    # тесты сразу, разнос через 10–20 с допишется внизу этого же сообщения
     if ok:
         solved_now = await count_solved(user["id"])
         await wait.edit_text(text, parse_mode="HTML")
@@ -563,6 +560,7 @@ async def _check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE, ta
             topic_id,
             set_id,
             attempt_count,
+            results,
             user_code,
             task["description"],
             report,

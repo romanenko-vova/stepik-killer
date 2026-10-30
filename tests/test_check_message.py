@@ -17,7 +17,9 @@ def test_only_task_visible_passes_are_shown():
     assert "Тест 6:</b> ❌" in text and "36" in text
 
 
-async def test_roast_comes_as_separate_message_with_buttons(monkeypatch):
+async def test_roast_appended_below_tests_with_buttons(monkeypatch):
+    import asyncio
+
     async def fake_run(code, tests):
         return False, [{"n": 1, "ok": True}, {"n": 2, "ok": False, "input": "2", "expected": "4", "actual": "22"}]
 
@@ -37,17 +39,13 @@ async def test_roast_comes_as_separate_message_with_buttons(monkeypatch):
 
     upd, _ = make_update(tg_id=8101, text="print(input()+input())", bot=bot)
     await gh.check_solution(upd, context)
-    # разнос летит фоновой задачей — дожидаемся её
-    import asyncio
     for _ in range(50):
         if any("Панч" in m["text"] for m in bot.sent):
             break
         await asyncio.sleep(0.05)
 
-    tests_msg = next(m for m in bot.sent if "Не принято" in m["text"])
-    assert "Панч" not in tests_msg["text"]
-    roast = next(m for m in bot.sent if "Панч" in m["text"])
-    assert not roast.get("edit")
-    assert "Дай подсказку" in str(roast["reply_markup"])
-    # кнопки под тестами убраны
-    assert any(m.get("edit_markup") and m["reply_markup"] is None for m in bot.sent)
+    final = next(m for m in bot.sent if "Панч" in m["text"])
+    assert final.get("edit")  # то же сообщение, не новое
+    text = final["text"]
+    assert text.index("Не принято") < text.index("Тест 2") < text.index("Панч")
+    assert "Дай подсказку" in str(final["reply_markup"])
