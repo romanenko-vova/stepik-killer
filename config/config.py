@@ -13,5 +13,9 @@ GPT_MODEL = os.getenv("GPT_MODEL") or "x-ai/grok-4.3"
 
 ADMIN_USER = os.getenv("ADMIN_USER") or "admin"
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
-ADMIN_HOST = os.getenv("ADMIN_HOST") or "0.0.0.0"
+ADMIN_HOST = os.getenv("ADMIN_HOST") or "127.0.0.1"
 ADMIN_PORT = int(os.getenv("ADMIN_PORT") or "8080")
+
+# песочница: образ и сколько контейнеров гоняем одновременно
+DOCKER_IMAGE = os.getenv("DOCKER_IMAGE") or "python:3.12-slim"
+DOCKER_PARALLEL = int(os.getenv("DOCKER_PARALLEL") or "3")

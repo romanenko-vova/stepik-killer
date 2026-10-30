@@ -436,6 +436,13 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tests = json.loads(task["tests"])
     ok, results = await run_tests(user_code, tests)
+    if results and results[0].get("infra"):
+        # сломалась песочница, а не решение — попытку не засчитываем
+        await wait.edit_text(
+            "Проверка сейчас не работает — это у нас, а не у тебя. "
+            "Попробуй прислать код ещё раз через минуту."
+        )
+        return SOLVING
     report = format_tests_plain(results)
 
     solution_id = await add_solution(
