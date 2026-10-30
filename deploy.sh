@@ -6,12 +6,12 @@ cd "$(dirname "$0")"
 
 git fetch origin
 git reset --hard origin/main
-./env/bin/pip install -q -r requirements.txt
+# всё через python -m: у скриптов в env/bin абсолютный путь, после переноса папки они ломаются
+./env/bin/python -m pip install -q -r requirements.txt
 
 # база в docker — поднимаем, если лежит, и ждём готовности
 docker compose up -d db
 until docker compose exec -T db pg_isready -q; do sleep 1; done
-# через python -m: у скриптов в env/bin абсолютный путь, после переноса папки они ломаются
 ./env/bin/python -m alembic upgrade head
 
 export NVM_DIR="$HOME/.nvm"
