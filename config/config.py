@@ -27,3 +27,14 @@ DOCKER_PARALLEL = int(os.getenv("DOCKER_PARALLEL") or "3")
 # ревью: лимит ответа и разброс. У grok лимит включает рассуждения — держим запас
 REVIEW_MAX_TOKENS = int(os.getenv("REVIEW_MAX_TOKENS") or "900")
 REVIEW_TEMPERATURE = float(os.getenv("REVIEW_TEMPERATURE") or "0.9")
+
+# ЧЕРНОВИК: ссылка на пробный урок, поменять на настоящую
+TRIAL_URL = os.getenv("TRIAL_URL") or "https://romanenkouchit.ru/?utm_source=nottoxicbot"
+# оффер: после стольких решённых задач — сразу
+OFFER_AFTER_SOLVED = int(os.getenv("OFFER_AFTER_SOLVED") or "10")
+# или через столько дней после старта, если решено хотя бы OFFER_MIN_SOLVED
+OFFER_AFTER_DAYS = int(os.getenv("OFFER_AFTER_DAYS") or "3")
+OFFER_MIN_SOLVED = int(os.getenv("OFFER_MIN_SOLVED") or "3")
+# повтор, если не нажал, и сколько всего раз показываем
+OFFER_REPEAT_DAYS = int(os.getenv("OFFER_REPEAT_DAYS") or "7")
+OFFER_MAX_SHOWS = int(os.getenv("OFFER_MAX_SHOWS") or "2")

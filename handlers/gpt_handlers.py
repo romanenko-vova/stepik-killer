@@ -20,6 +20,7 @@ from db.topic_crud import get_topic, get_topics_by_module_id
 from db.users_crud import get_user
 from db.zadacha_crud import (
     add_solution,
+    count_solved,
     get_attempt_count,
     get_recent_attempts,
     get_solved_task_ids,
@@ -31,6 +32,8 @@ from db.zadacha_crud import (
 )
 from services.code_runner import run_tests
 from services.events import track
+from services.progress import progress_text
+from handlers.offer import maybe_offer_after_solve
 from services.tg_html import escape_tg_text, fit_tg_html, prepare_tg_html
 from services.verify_python_code import give_hint, review_solution
 
@@ -480,6 +483,7 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return SOLVING
     report = format_tests_plain(results)
 
+    solved_before = await count_solved(user["id"])
     solution_id = await add_solution(
         user["id"], task_id, user_code, "ok" if ok else "fail", results
     )
@@ -500,12 +504,17 @@ async def check_solution(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # тесты сразу, gpt потом допишет в это же сообщение
     if ok:
+        solved_now = await count_solved(user["id"])
         await wait.edit_text(text, parse_mode="HTML")
+        done = "Задача решена."
+        if solved_now > solved_before:
+            done += "\n" + progress_text(solved_before, solved_now)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Задача решена. Что дальше?",
+            text=done,
             reply_markup=markup,
         )
+        await maybe_offer_after_solve(context.bot, user, update.effective_chat.id, solved_now)
     else:
         await wait.edit_text(text, reply_markup=markup, parse_mode="HTML")
 

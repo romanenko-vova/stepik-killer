@@ -27,6 +27,11 @@ class User(Base):
     toxic_level = Column(Integer, nullable=False, server_default="0")
     # откуда пришёл: параметр deep-link /start <source>, только первый
     source = Column(String(64), nullable=True, index=True)
+    # оффер пробного урока: когда показали последний раз и сколько всего
+    offer_sent_at = Column(DateTime(timezone=True), nullable=True)
+    offer_count = Column(Integer, nullable=False, server_default="0")
+    # нажал «Хочу пробный урок» — больше не предлагаем
+    trial_clicked_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 

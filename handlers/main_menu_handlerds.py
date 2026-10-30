@@ -4,7 +4,8 @@ from telegram.ext import ContextTypes
 from config.states import MAIN_MENU
 from db.personal_crud import personal_counts
 from db.users_crud import create_user, get_user
-from db.zadacha_crud import get_progress, starter_progress
+from db.zadacha_crud import count_solved, get_progress, starter_progress
+from services.progress import level_for
 
 
 async def main_menu_text(tg_id: int) -> str:
@@ -29,6 +30,10 @@ async def main_menu_text(tg_id: int) -> str:
     if personal_total:
         progress += f"\nПерсональные: {personal_solved} из {personal_total}."
 
+    solved_all = await count_solved(user["id"])
+    _, level_name, _ = level_for(solved_all)
+    if level_name:
+        progress = f"Уровень: «{level_name}», решено {solved_all}.\n" + progress
     if starter_total and starter_solved < starter_total:
         progress = f"Стартовый набор: {starter_solved} из {starter_total}.\n" + progress
 

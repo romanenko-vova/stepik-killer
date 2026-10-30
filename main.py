@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from telegram import Update
@@ -27,12 +28,15 @@ from handlers.gpt_handlers import (
     start_modul,
 )
 from handlers.main_menu_handlerds import main_menu
+from handlers.offer import offer_loop, offer_parents, offer_trial
 from handlers.start_handler import choose_toxic, open_settings, settings_command, start_handler
 
 
 async def on_startup(app):
     await db_startup()
     await start_admin()
+    # ссылку держим в bot_data, иначе задачу может собрать сборщик мусора
+    app.bot_data["offer_loop"] = asyncio.create_task(offer_loop(app))
 
 
 def main():
@@ -103,6 +107,9 @@ def main():
         fallbacks=[
             CommandHandler("start", start_handler),
             CommandHandler("settings", settings_command),
+            # оффер может прийти в любом состоянии — ловим везде, состояние не меняем
+            CallbackQueryHandler(offer_trial, pattern="^offer_trial$"),
+            CallbackQueryHandler(offer_parents, pattern="^offer_parents$"),
         ],
         persistent=True,
         name="conversation_handler",
