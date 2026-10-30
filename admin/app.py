@@ -12,6 +12,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from config.config import ADMIN_HOST, ADMIN_PASSWORD, ADMIN_PORT, ADMIN_USER
 from db.admin_crud import list_students, person_name, student_solutions, student_tasks
+from db.funnel_crud import funnel_by_day, funnel_by_source
 from db.personal_crud import sets_for_user, tasks_in_set
 from db.users_crud import get_user_by_id
 from db.zadacha_crud import get_solved_task_ids, get_task
@@ -146,10 +147,11 @@ def page(title: str, body: str) -> str:
 <body>
   <header>
     <h1><a href="/">Админка</a></h1>
-    <p>Романенко Учит — прогресс и сданные решения</p>
+    <p>NotToxicPythonbot — прогресс, решения и воронка</p>
     <nav>
       <a href="/">Ученики</a>
       <a href="/personal">Персональные задания</a>
+      <a href="/funnel">Воронка</a>
     </nav>
   </header>
   <main>{body}</main>
@@ -335,6 +337,62 @@ async def _personal_block(user_pk: int) -> str:
         )
     lines.append("<ul>" + "".join(items) + "</ul>")
     return "".join(lines)
+
+
+def _pct(part: int, whole: int) -> str:
+    if not whole:
+        return "—"
+    return f"{part} <span class='meta'>{round(100 * part / whole)}%</span>"
+
+
+@app.get("/funnel", response_class=HTMLResponse)
+async def funnel(days: int = 30, _: str = Depends(require_admin)):
+    days = max(1, min(days, 365))
+    sources = await funnel_by_source(days)
+    daily = await funnel_by_day(14)
+
+    src_rows = []
+    for row in sources:
+        starts = row["starts"]
+        src_rows.append(
+            "<tr>"
+            f"<td><code>{html.escape(row['source'])}</code></td>"
+            f"<td>{starts}</td>"
+            f"<td>{_pct(row['solved_1'], starts)}</td>"
+            f"<td>{_pct(row['solved_5'], starts)}</td>"
+            f"<td>{_pct(row['solved_10'], starts)}</td>"
+            f"<td>{_pct(row['offer_shown'], starts)}</td>"
+            f"<td>{_pct(row['trial_click'], starts)}</td>"
+            f"<td>{_pct(row['parents_text'], starts)}</td>"
+            "</tr>"
+        )
+    day_rows = []
+    for row in daily:
+        day_rows.append(
+            "<tr>"
+            f"<td>{row['day']:%d.%m}</td>"
+            f"<td>{row['starts']}</td><td>{row['active']}</td><td>{row['attempts']}</td>"
+            f"<td>{row['solved']}</td><td>{row['offer_shown']}</td>"
+            f"<td>{row['trial_click']}</td><td>{row['parents_text']}</td>"
+            "</tr>"
+        )
+    periods = " ".join(f"<a href='/funnel?days={d}'>{d} дн</a>" for d in (7, 30, 90))
+    body = (
+        f"<h2>По источникам за {days} дн</h2>"
+        f"<p class='meta'>Источник — параметр ссылки t.me/NotToxicPythonbot?start=reel_12. "
+        f"Ученики с личными блоками не считаются. Период: {periods}</p>"
+        "<table><thead><tr><th>Источник</th><th>Стартов</th><th>Решил 1+</th><th>5+</th><th>10+</th>"
+        "<th>Видел оффер</th><th>Нажал пробный</th><th>Взял текст родителям</th></tr></thead><tbody>"
+        + ("".join(src_rows) or "<tr><td colspan='8'>Пока пусто</td></tr>")
+        + "</tbody></table>"
+        "<h2>По дням, 14 дней</h2>"
+        "<p class='meta'>Дни по Москве. «Активных» — кто прислал хоть одно решение в этот день.</p>"
+        "<table><thead><tr><th>День</th><th>Новых</th><th>Активных</th><th>Попыток</th><th>Решено</th>"
+        "<th>Офферов</th><th>Пробный</th><th>Родителям</th></tr></thead><tbody>"
+        + "".join(day_rows)
+        + "</tbody></table>"
+    )
+    return page("Воронка", body)
 
 
 async def start_admin():
