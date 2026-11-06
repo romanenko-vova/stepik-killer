@@ -136,10 +136,12 @@ async def start_modul(update: Update, context: ContextTypes.DEFAULT_TYPE):
     modules = await get_modules()
     keyboard = []
     for module in modules:
+        description = (module.get("description") or "").strip()
+        title = f"{module['title']} - {description}" if description else module["title"]
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    module["title"],
+                    title,
                     callback_data=f"modul_{module['id']}",
                     style="primary",
                 )
